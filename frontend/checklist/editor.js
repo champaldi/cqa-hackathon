@@ -1,33 +1,15 @@
-// Временный редактор чек-листа: JSON в текстовом поле.
-// Зона задачи qa/checklist-editor. Наружу отдаёт только renderChecklist(ctx).
+// Редактор чек-листа: таблица версий и форма критериев. Наружу отдаёт только renderChecklist(ctx).
+// Сохранение создаёт новую версию через api.saveChecklist, старые версии и готовые оценки не меняются.
 
 import { api } from "../api.js";
 import { el } from "../dom.js";
 import { formatDate } from "../format.js";
+import { criterionForm } from "./criterion-form.js";
+import { blankCriterion, fromChecklist, toPayload, validate, weightSum } from "./draft.js";
 
-const COLUMNS = ["Версия", "Название", "Критериев", "Создана", "Статус"];
+const COLUMNS = ["Версия", "Название", "Критериев", "Сумма весов", "Создана", "Статус"];
 
-function toDraftJson({ name, sections, criteria }) {
-  return JSON.stringify({ name, sections, criteria }, null, 2);
-}
-
-function parseDraft(text) {
-  try {
-    return JSON.parse(text);
-  } catch (cause) {
-    throw new Error(`Некорректный JSON: ${cause.message}`, { cause });
-  }
-}
-
-async function saveVersion(ctx, editor, button) {
-  const action = async () => {
-    const checklist = await api.saveChecklist(parseDraft(editor.value));
-    await renderChecklist(ctx);
-    return checklist;
-  };
-  const saved = await ctx.run(action, { button, label: "Сохранение версии…" });
-  if (saved) ctx.notify(`Версия ${saved.version} сохранена и стала активной.`);
-}
+const formatWeight = (value) => String(Math.round(value * 100) / 100).replace(".", ",");
 
 function versionRow(checklist, activeId) {
   return el(
@@ -36,6 +18,7 @@ function versionRow(checklist, activeId) {
     el("td", { class: "cell-num" }, checklist.version),
     el("td", {}, checklist.name),
     el("td", { class: "cell-num" }, checklist.criteria.length),
+    el("td", { class: "cell-num" }, formatWeight(weightSum(checklist))),
     el("td", {}, formatDate(checklist.created_at)),
     el("td", {}, checklist.id === activeId ? el("span", { class: "tag tag--pass" }, "Активная") : null),
   );
@@ -55,20 +38,116 @@ function versionsTable(versions, activeId) {
   );
 }
 
-function editorForm(ctx, active) {
-  const editor = el("textarea", {
-    class: "input input--code",
-    rows: "24",
-    spellcheck: "false",
-    "aria-label": "JSON чек-листа: name, sections, criteria",
-    value: toDraftJson(active),
+function sumText(draft) {
+  const sum = weightSum(draft);
+  const note = sum === 100 ? "" : ". Сумма не равна 100: при подсчёте веса приводятся к 100, сохранять можно";
+  return `Сумма весов: ${formatWeight(sum)}${note}.`;
+}
+
+function errorList(errors) {
+  return el(
+    "div",
+    { class: "message message--error", role: "alert" },
+    el(
+      "div",
+      { class: "message__text" },
+      el("strong", {}, "Версия не сохранена, исправьте поля:"),
+      el("ul", {}, errors.map((error) => el("li", {}, error))),
+    ),
+  );
+}
+
+async function save(ctx, draft, button, errorsBox) {
+  const errors = validate(draft);
+  errorsBox.replaceChildren(errors.length ? errorList(errors) : "");
+  if (errors.length) {
+    errorsBox.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  const saved = await ctx.run(() => api.saveChecklist(toPayload(draft)), {
+    button,
+    label: "Сохранение версии…",
   });
-  const button = el("button", { class: "btn btn--primary", type: "submit" }, "Сохранить новую версию");
+  if (!saved) return;
+  await renderChecklist(ctx);
+  ctx.notify(`Версия ${saved.version} сохранена и стала активной. Новые оценки пойдут по ней.`);
+}
+
+function editorForm(ctx, active) {
+  const draft = fromChecklist(active);
+  const sum = el("p", { class: "note", role: "status" });
+  const list = el("div", { class: "editor" });
+  const errorsBox = el("div", {});
+  const paintSum = () => {
+    sum.textContent = sumText(draft);
+  };
+
+  const paint = () => {
+    list.replaceChildren(
+      ...draft.criteria.map((criterion, index) =>
+        criterionForm(criterion, draft.sections, {
+          onStructure: paint,
+          onWeight: paintSum,
+          onRemove: () => {
+            draft.criteria.splice(index, 1);
+            paint();
+          },
+        }),
+      ),
+    );
+    paintSum();
+  };
+
+  const name = el("input", {
+    class: "input",
+    type: "text",
+    value: draft.name,
+    oninput: (e) => {
+      draft.name = e.target.value;
+    },
+  });
+  name.id = "checklist-name";
+
+  const addButton = el(
+    "button",
+    {
+      class: "btn",
+      type: "button",
+      onclick: () => {
+        draft.criteria.push(blankCriterion(draft));
+        paint();
+        list.lastElementChild?.scrollIntoView({ block: "start" });
+      },
+    },
+    "Добавить критерий",
+  );
+  const saveButton = el("button", { class: "btn btn--primary", type: "submit" }, "Сохранить новую версию");
+  const resetButton = el(
+    "button",
+    { class: "btn", type: "button", onclick: () => renderChecklist(ctx) },
+    "Отменить изменения",
+  );
   const onsubmit = (event) => {
     event.preventDefault();
-    saveVersion(ctx, editor, button);
+    save(ctx, draft, saveButton, errorsBox);
   };
-  return el("form", { class: "editor", onsubmit }, editor, el("div", {}, button));
+
+  paint();
+  return el(
+    "form",
+    { class: "editor", onsubmit, novalidate: true },
+    el(
+      "div",
+      { class: "field" },
+      el("label", { class: "field__label", for: "checklist-name" }, "Название чек-листа"),
+      name,
+    ),
+    list,
+    el("div", {}, addButton),
+    sum,
+    errorsBox,
+    el("div", { class: "toolbar" }, saveButton, resetButton),
+  );
 }
 
 export async function renderChecklist(ctx) {
@@ -81,14 +160,17 @@ export async function renderChecklist(ctx) {
         "div",
         { class: "page-head" },
         el("h1", { class: "page-title" }, "Чек-лист"),
-        el("p", { class: "page-sub" }, "Временный редактор до задачи qa/checklist-editor."),
+        el(
+          "p",
+          { class: "page-sub" },
+          `Активная версия ${active.version}. Правки сохраняются новой версией, она сразу становится активной.`,
+        ),
       ),
       versionsTable(versions, active.id),
       el(
         "p",
         { class: "note" },
-        `Ниже JSON активной версии ${active.version}. Новая версия применяется к следующим оценкам, `,
-        "готовые карточки сохраняют свою версию.",
+        "Готовые оценки остаются на своей версии. Чтобы применить новую, оцените диалог ещё раз.",
       ),
       editorForm(ctx, active),
     ),

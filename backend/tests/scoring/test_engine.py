@@ -1,7 +1,6 @@
-"""Тесты заглушки подсчёта: только форма результата и явные решения.
+"""Тесты формы результата и явных решений. Формулы и контрольные примеры в test_rules.py."""
 
-Формулы с перераспределением N/A и округлением добавляет задача qa/scoring-engine.
-"""
+import pytest
 
 from backend.app.contracts import Appeal, Checklist, CriterionResult, Decision
 from backend.app.scoring.engine import apply_decisions, score
@@ -78,10 +77,9 @@ def test_gross_error_is_reported_separately_from_points(checklist: Checklist) ->
     assert flagged.total == clean.total
 
 
-def test_criterion_without_result_is_not_applicable(checklist: Checklist) -> None:
-    rows = {row.criterion_id: row for row in score(checklist, [result("yes-no")]).criteria}
-
-    assert rows["scale"].applicable is False
+def test_criterion_without_result_raises(checklist: Checklist) -> None:
+    with pytest.raises(ValueError, match="scale"):
+        score(checklist, [result("yes-no")])
 
 
 def test_changed_decision_replaces_the_answer(checklist: Checklist) -> None:
