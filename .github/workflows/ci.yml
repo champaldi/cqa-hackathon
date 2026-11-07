@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest --cov=backend/app --cov=scripts --cov-fail-under=80
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Frontend tests
+        run: node --test "frontend/tests/*.test.mjs"
+
+  scope:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Check role scope
+        # Имя ветки это недоверенный ввод: только через env, не подставлять в run напрямую.
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: python scripts/check_scope.py --branch "$HEAD_REF" --base "origin/$BASE_REF"

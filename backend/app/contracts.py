@@ -40,7 +40,7 @@ class Turn(Frozen):
     text: str
     offset_sec: float | None = None  # секунды от начала диалога
     audio_offset_sec: float | None = None  # позиция от начала записи, None если реплика вне записи
-    audio_tail_sec: float | None = None  # секунды до конца записи, см. docs/DATA_FINDINGS.md
+    audio_tail_sec: float | None = None  # секунды до конца записи
 
 
 class Dialog(Frozen):
@@ -246,6 +246,35 @@ class DialogSummary(Frozen):
 
 
 # ---------- Запросы и задачи ----------
+
+
+class ApiResponse[T](Frozen):
+    """Единый конверт всех ответов API. На клиенте его разворачивает frontend/api.js."""
+
+    success: bool = True
+    data: T | None = None
+    error: str | None = None
+
+
+class HealthInfo(Frozen):
+    status: str = "ok"
+    evaluator: str
+    dataset_configured: bool
+
+
+class ImportRequest(Frozen):
+    group_id: str = Field(min_length=1, max_length=64, pattern=r"^[\w-]+$")
+
+
+class ImportResult(Frozen):
+    group_id: str
+    imported: int
+
+
+class AudioLink(Frozen):
+    """Свежая ссылка на запись звонка, её запрашивают перед прослушиванием."""
+
+    url: str
 
 
 class EvaluateRequest(Frozen):

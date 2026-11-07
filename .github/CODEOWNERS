@@ -1,0 +1,25 @@
+# Кого GitHub сам зовёт на ревью. Выигрывает последнее совпадение, автор PR в запрос не попадает.
+# Файл только подсказывает ревьюера и ничего не блокирует: для слияния хватает одного одобрения.
+# Кто какие файлы может менять, проверяет scripts/check_scope.py.
+
+# PR принимает Tech Lead.
+*                          @atomi7e
+
+# Код Tech Lead и общие настройки смотрит QA. PR самого QA уходит Tech Lead.
+/backend/                  @atomi7e @karim312k1
+/.github/                  @atomi7e @karim312k1
+/scripts/                  @atomi7e @karim312k1
+/requirements.txt          @atomi7e @karim312k1
+/pyproject.toml            @atomi7e @karim312k1
+
+# Зоны Алдияра и Карима внутри backend возвращаются к Tech Lead.
+/backend/app/evaluator/    @atomi7e
+/backend/tests/evaluator/  @atomi7e
+/backend/app/scoring/      @atomi7e
+/backend/tests/scoring/    @atomi7e
+
+# Контракт и правила меняются с согласия всех четверых.
+/backend/app/contracts.py  @atomi7e @champaldi @Kyjoki @karim312k1
+/frontend/api.js           @atomi7e @champaldi @Kyjoki @karim312k1
+/AGENTS.md                 @atomi7e @champaldi @Kyjoki @karim312k1
+/CLAUDE.md                 @atomi7e @champaldi @Kyjoki @karim312k1
