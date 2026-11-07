@@ -1,10 +1,18 @@
-"""Подсчёт баллов. ЗАГЛУШКА, форма результата настоящая, формулы упрощены.
+"""Подсчёт баллов по правилам из docs/BRIEF.md, раздел «Порядок расчёта баллов».
 
-Задача qa/scoring-engine добавляет правила из docs/BRIEF.md: перераспределение веса N/A
-между применимыми критериями, максимум 100 баллов и точное округление. Сейчас N/A просто
-исключается и итог не приводится к 100. Сигнатуры функций менять нельзя: на них опирается
-backend/app/services.py.
+1. Применим критерий с весом больше нуля и ответом не N/A. Флаги грубых ошибок весят 0.
+2. «Да» даёт полный вес, «Нет» ноль, ступень шкалы пропорциональна верхней ступени.
+3. Вес применимых приводится к 100: новый вес = вес * 100 / S, где S — сумма весов применимых.
+   Так любой чек-лист, в том числе с суммой весов не 100, даёт максимум 100.
+4. Считается точно (Fraction), итог округляется один раз до двух знаков, половина вверх.
+   Секции округляются только для показа, итог из них не складывается.
+
+Веса, шкалы и id берутся из чек-листа, в коде их нет. Сигнатуры score() и apply_decisions()
+используются в backend/app/services.py.
 """
+
+from decimal import ROUND_HALF_UP, Decimal, localcontext
+from fractions import Fraction
 
 from backend.app.contracts import (
     Appeal,
@@ -17,69 +25,118 @@ from backend.app.contracts import (
     SectionScore,
 )
 
+HUNDRED = Fraction(100)
+CENT = Decimal("0.01")
+
 
 def score(checklist: Checklist, results: list[CriterionResult]) -> ScoreSummary:
-    by_id = {result.criterion_id: result for result in results}
-    rows = [_score_criterion(criterion, by_id.get(criterion.id)) for criterion in checklist.criteria]
-    applicable = [row for row in rows if row.applicable]
+    by_id = _index_results(checklist, results)
+    raw = {c.id: _raw_points(c, by_id[c.id]) for c in checklist.criteria}
+    applicable_weight = sum(
+        (Fraction(str(c.weight)) for c in checklist.criteria if raw[c.id] is not None), Fraction(0)
+    )
+    factor = HUNDRED / applicable_weight if applicable_weight else Fraction(0)
+
+    exact = {c.id: _exact_row(c, raw[c.id], factor) for c in checklist.criteria}
+    rows = [
+        CriterionScore(
+            criterion_id=c.id,
+            applicable=raw[c.id] is not None,
+            base_weight=c.weight,
+            effective_weight=float(exact[c.id][0]),
+            points=float(exact[c.id][1]),
+        )
+        for c in checklist.criteria
+    ]
+    total = sum((points for _, points in exact.values()), Fraction(0)) if applicable_weight else None
     gross_errors = [
-        criterion.id
-        for criterion in checklist.criteria
-        if criterion.answer_type == "flag" and _answer(by_id.get(criterion.id)) == "yes"
+        c.id for c in checklist.criteria if c.answer_type == "flag" and by_id[c.id].answer == "yes"
     ]
     return ScoreSummary(
-        total=round(sum(row.points for row in applicable), 2) if applicable else None,
+        total=_round(total) if total is not None else None,
         criteria=rows,
-        sections=_score_sections(checklist, rows),
+        sections=_score_sections(checklist, exact),
         gross_error=bool(gross_errors),
         gross_error_criteria=gross_errors,
     )
 
 
 def apply_decisions(results: list[CriterionResult], appeals: list[Appeal]) -> list[CriterionResult]:
-    """Возвращает финальные результаты. Исходный список не меняется."""
-    changes = {a.criterion_id: a.decision for a in appeals if a.status == "changed" and a.decision}
+    """Возвращает финальные результаты. Исходный список и его объекты не меняются.
+
+    Учитываются только решения «изменить». Если по критерию их несколько, берётся самое позднее.
+    """
+    latest: dict[str, Decision] = {}
+    for appeal in appeals:
+        decision = appeal.decision
+        if appeal.status != "changed" or decision is None:
+            continue
+        current = latest.get(appeal.criterion_id)
+        if current is None or decision.decided_at > current.decided_at:
+            latest[appeal.criterion_id] = decision
     return [
-        _with_decision(result, changes[result.criterion_id]) if result.criterion_id in changes else result
+        _with_decision(result, latest[result.criterion_id]) if result.criterion_id in latest else result
         for result in results
     ]
 
 
-def _answer(result: CriterionResult | None) -> str | None:
-    return result.answer if result else None
+def _index_results(checklist: Checklist, results: list[CriterionResult]) -> dict[str, CriterionResult]:
+    known = {c.id for c in checklist.criteria}
+    by_id: dict[str, CriterionResult] = {}
+    for result in results:
+        if result.criterion_id not in known:
+            raise ValueError(f"Результат для неизвестного критерия {result.criterion_id}")
+        if result.criterion_id in by_id:
+            raise ValueError(f"Повторный результат для критерия {result.criterion_id}")
+        by_id[result.criterion_id] = result
+    missing = [c.id for c in checklist.criteria if c.id not in by_id]
+    if missing:
+        raise ValueError(f"Нет результата для критериев: {', '.join(missing)}")
+    return by_id
 
 
-def _score_criterion(criterion: Criterion, result: CriterionResult | None) -> CriterionScore:
-    applicable = result is not None and result.answer != "na" and criterion.weight > 0
-    return CriterionScore(
-        criterion_id=criterion.id,
-        applicable=applicable,
-        base_weight=criterion.weight,
-        effective_weight=criterion.weight if applicable else 0,
-        points=_points(criterion, result) if applicable else 0,
-    )
-
-
-def _points(criterion: Criterion, result: CriterionResult) -> float:
+def _raw_points(criterion: Criterion, result: CriterionResult) -> Fraction | None:
+    """Баллы до перераспределения или None, если критерий не участвует в итоге."""
+    if result.answer == "scale" and result.scale_value is None:
+        raise ValueError(f"Критерий {criterion.id}: ответ по шкале без ступени")
+    weight = Fraction(str(criterion.weight))
+    if result.answer == "na" or weight <= 0:
+        return None
     if result.answer == "yes":
-        return criterion.weight
-    if result.answer != "scale" or not criterion.scale or result.scale_value is None:
-        return 0
+        return weight
+    if result.answer == "no":
+        return Fraction(0)
+    if not criterion.scale:
+        raise ValueError(f"Критерий {criterion.id}: ответ по шкале, а шкалы у критерия нет")
     top = max(step.value for step in criterion.scale)
-    return criterion.weight * result.scale_value / top if top else 0
+    return weight * result.scale_value / top if top else Fraction(0)
 
 
-def _score_sections(checklist: Checklist, rows: list[CriterionScore]) -> list[SectionScore]:
-    section_of = {criterion.id: criterion.section_id for criterion in checklist.criteria}
+def _exact_row(criterion: Criterion, raw: Fraction | None, factor: Fraction) -> tuple[Fraction, Fraction]:
+    """Точные (вес после перераспределения, баллы) одного критерия."""
+    if raw is None:
+        return Fraction(0), Fraction(0)
+    return Fraction(str(criterion.weight)) * factor, raw * factor
+
+
+def _round(value: Fraction) -> float:
+    """Два знака, точная половина вверх. Без float и встроенного round()."""
+    with localcontext() as ctx:
+        ctx.prec = 50
+        exact = Decimal(value.numerator) / Decimal(value.denominator)
+        return float(exact.quantize(CENT, rounding=ROUND_HALF_UP))
+
+
+def _score_sections(checklist: Checklist, exact: dict[str, tuple[Fraction, Fraction]]) -> list[SectionScore]:
     summaries = []
     for section in checklist.sections:
-        members = [row for row in rows if section_of[row.criterion_id] == section.id]
+        members = [exact[c.id] for c in checklist.criteria if c.section_id == section.id]
         summaries.append(
             SectionScore(
                 section_id=section.id,
                 title=section.title,
-                points=round(sum(row.points for row in members), 2),
-                max_points=round(sum(row.effective_weight for row in members), 2),
+                points=_round(sum((points for _, points in members), Fraction(0))),
+                max_points=_round(sum((weight for weight, _ in members), Fraction(0))),
             )
         )
     return summaries
