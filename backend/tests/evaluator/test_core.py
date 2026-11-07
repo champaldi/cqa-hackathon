@@ -239,7 +239,7 @@ def test_rejected_error_not_retryable_and_keeps_usage(simple_dialog, default_che
     assert ei.value.upstream_status == 400 and "400" in str(ei.value)
 
 
-def test_error_hierarchy_status_codees():
+def test_error_hierarchy_http_statuses():
     statuses = {
         NoOperatorTurnsError: (422, False),
         ValidationFailedError: (502, False),
