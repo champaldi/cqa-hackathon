@@ -64,6 +64,13 @@ def test_prompt_source_has_no_criteria_ids_or_titles(default_checklist):
         assert c.title not in src
 
 
+def test_prompt_source_has_no_criterion_rules():
+    """Смысл критериев живёт в чек-листе: при замене критерия правило исчезает вместе с ним."""
+    src = PROMPT_SRC.read_text(encoding="utf-8").lower()
+    for word in ("приветств", "представлен"):
+        assert word not in src
+
+
 def test_general_rules_present(default_checklist):
     p = build_system_prompt(default_checklist)
     for needle in (

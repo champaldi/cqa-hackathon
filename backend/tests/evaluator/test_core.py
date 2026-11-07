@@ -236,7 +236,7 @@ def test_anthropic_status_code_in_error_without_body():
     exc = anthropic.RateLimitError("СЕКРЕТНОЕ_ТЕЛО", response=resp, body=None)
     with pytest.raises(LLMUnavailableError) as ei:
         AnthropicClient("m", sdk_client=_FakeSDK(None, exc)).complete("s", "u", {})
-    assert ei.value.status_code == 429 and "429" in str(ei.value) and "СЕКРЕТНОЕ" not in str(ei.value)
+    assert ei.value.upstream_status == 429 and "429" in str(ei.value) and "СЕКРЕТНОЕ" not in str(ei.value)
 
 
 def test_new_scale_criterion_end_to_end(simple_dialog, new_criterion_checklist):
@@ -275,11 +275,11 @@ def test_transport_error_keeps_spent_usage_and_logs(simple_dialog, default_check
             self.n += 1
             if self.n == 1:
                 return LLMResponse(None, 700, 50, "test-model")
-            raise LLMUnavailableError("HTTP 503", status_code=503)
+            raise LLMUnavailableError("HTTP 503", upstream_status=503)
 
     with caplog.at_level(logging.DEBUG), pytest.raises(LLMUnavailableError) as ei:
         evaluate(simple_dialog, default_checklist, client=DownAfterOne(), prices=Prices(2.0, 10.0))
     u = ei.value.usage
     assert (u.llm_calls, u.input_tokens, u.output_tokens, u.model) == (1, 700, 50, "test-model")
     done = [r.getMessage() for r in caplog.records if "evaluator_done" in r.getMessage()]
-    assert len(done) == 1 and "status=llm_unavailable" in done[0] and "status_code=503" in done[0]
+    assert len(done) == 1 and "status=llm_unavailable" in done[0] and "upstream_status=503" in done[0]

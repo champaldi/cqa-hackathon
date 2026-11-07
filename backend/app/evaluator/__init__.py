@@ -1,6 +1,6 @@
 """Evaluator: оценка оператора по чек-листу. Публичный интерфейс согласуется с Tech Lead."""
 
-from .core import evaluate
+from .core import LlmEvaluator, evaluate
 from .errors import (
     CriterionError,
     EvaluationError,
@@ -13,6 +13,7 @@ __all__ = [
     "CriterionError",
     "EvaluationError",
     "LLMUnavailableError",
+    "LlmEvaluator",
     "NoOperatorTurnsError",
     "ValidationFailedError",
     "evaluate",

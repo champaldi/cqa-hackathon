@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 
 from ..contracts import Checklist, CriterionResult, Dialog, EvaluatorOutput, Usage
 from .client import LLMClient, Prices, make_client
@@ -74,7 +75,7 @@ def evaluate(
             resp = client.complete(system, user, build_tool_schema(pending))
         except LLMUnavailableError as exc:
             exc.usage = _usage(model, calls, tokens_in, tokens_out, prices)
-            _log_done(dialog, "llm_unavailable", exc.usage, f"status_code={exc.status_code or '-'}")
+            _log_done(dialog, "llm_unavailable", exc.usage, f"upstream_status={exc.upstream_status or '-'}")
             raise
         latency_ms = int((time.perf_counter() - started) * 1000)
         calls += 1
@@ -120,3 +121,14 @@ def evaluate(
             )
     _log_done(dialog, "ok", usage, "-")
     return EvaluatorOutput(results=results, usage=usage)
+
+
+@dataclass(frozen=True)
+class LlmEvaluator:
+    """Настоящая модель за интерфейсом Evaluator. Состояния нет: пакет зовёт её из нескольких потоков."""
+
+    client: LLMClient
+    prices: Prices
+
+    def evaluate(self, dialog: Dialog, checklist: Checklist) -> EvaluatorOutput:
+        return evaluate(dialog, checklist, client=self.client, prices=self.prices)

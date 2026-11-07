@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..contracts import Usage
+from ..errors import AppError
 
 # Коды ошибок валидации. В логи и сообщения попадают только они, без текстов реплик и цитат.
 BAD_SHAPE = "bad_shape"
@@ -37,12 +38,16 @@ class CriterionError:
     message: str  # по-русски, без текстов модели: уходит в repair-запрос
 
 
-class EvaluationError(Exception):
+class EvaluationError(AppError):
     """База для всех ошибок оценки. Частичный результат не возвращается никогда."""
+
+    status_code = 502
 
 
 class NoOperatorTurnsError(EvaluationError):
     """В диалоге нет ни одной реплики operator, модель не вызывалась."""
+
+    status_code = 422
 
     def __init__(self, conversation_id: str) -> None:
         super().__init__(f"нет реплик оператора: {conversation_id}")
@@ -52,9 +57,9 @@ class NoOperatorTurnsError(EvaluationError):
 class LLMUnavailableError(EvaluationError):
     """Транспортный уровень исчерпан: 429, 5xx, таймаут, соединение."""
 
-    def __init__(self, message: str, status_code: int | None = None, usage: Usage | None = None) -> None:
+    def __init__(self, message: str, upstream_status: int | None = None, usage: Usage | None = None) -> None:
         super().__init__(message)
-        self.status_code = status_code
+        self.upstream_status = upstream_status  # код поставщика, не путать со status_code ответа API
         self.usage = usage  # расход предыдущих успешных попыток этой оценки
 
 

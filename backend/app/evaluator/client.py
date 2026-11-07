@@ -209,7 +209,7 @@ class AnthropicClient:
             status = getattr(exc, "status_code", None)
             suffix = f", HTTP {status}" if status else ""
             raise LLMUnavailableError(
-                f"вызов модели не удался: {type(exc).__name__}{suffix}", status_code=status
+                f"вызов модели не удался: {type(exc).__name__}{suffix}", upstream_status=status
             ) from exc
         tool_input = next(
             (b.input for b in resp.content if getattr(b, "type", None) == "tool_use" and b.name == TOOL_NAME),
