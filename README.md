@@ -27,16 +27,16 @@
 
 | Кто | Должность | Ветки | Зона в репозитории | Отвечает за |
 |---|---|---|---|---|
-| Карим | Tech Lead / Backend | `backend/*` | `backend/app/api`, `datasets`, `storage`, CI | Каркас, API, база, загрузка данных, аудио, приём PR |
+| atomi7e | Tech Lead / Backend | `backend/*` | `backend/app/api`, `datasets`, `storage`, CI | Каркас, API, база, загрузка данных, аудио, приём PR |
 | Алдияр | AI Engineer | `llm/*` | `backend/app/evaluator` | Промпт, вызов модели, проверка ответа, языки, стоимость |
 | Максим | Frontend Engineer | `ui/*` | `frontend/`, кроме редактора чек-листа | Список, карточка, плеер, апелляции |
-| atomi7e | QA / Product Engineer | `qa/*` | `backend/app/scoring`, редактор чек-листа, `eval/`, README | Тесты, подсчёт баллов, эталон, редактор, демо |
+| Карим | QA / Product Engineer | `qa/*` | `backend/app/scoring`, редактор чек-листа, `eval/`, README | Тесты, подсчёт баллов, эталон, редактор, демо |
 
 Общий контракт (`contracts.py`, `api.js`) не принадлежит никому. Меняется только через ветку `contract/*` с согласия всех четверых.
 
 ## Задачи и Pull Request
 
-**Карим: Tech Lead / Backend**
+**atomi7e: Tech Lead / Backend**
 
 1. `contract/skeleton`: каркас с заглушками, контракт и CI. После него начинают все.
     - Папки по таблице ролей, `contracts.py` берётся за основу.
@@ -60,7 +60,7 @@
 2. `ui/audio-and-appeals`: плеер с переходом к фрагменту, подача апелляции, экран проверяющего, исходная и финальная оценка.
 3. `ui/run-and-polish`: запуск пакетной оценки с прогрессом, состояния ошибок, подготовка к Dynamics 365.
 
-**atomi7e: QA / Product Engineer**
+**Карим: QA / Product Engineer**
 
 1. `qa/scoring-engine`: веса, шкалы, перераспределение N/A, секции, округление, грубая ошибка отдельно, пересчёт после апелляции.
 2. `qa/gold-set`: ручная разметка 15–20 диалогов на всех языках и сравнение с моделью.
