@@ -1,4 +1,4 @@
-"""Клиенты модели: протокол, MockClient для тестов и AnthropicClient.
+"""Клиенты модели: протокол, MockClient для тестов, AnthropicClient и OpenAIClient.
 
 Скрытых умолчаний нет: клиент и цены передаются явно (см. factory.py).
 """
@@ -186,6 +186,21 @@ MAX_TOKENS = 8192  # thinking на Opus 5.5 не выключается и вх�
 _REJECTED_STATUSES = frozenset({400, 401, 403, 404})
 
 
+def _api_failure(exc: Exception, connection_error: type[Exception]) -> LLMUnavailableError | LLMRejectedError:
+    """Ошибка SDK в наши типы.
+
+    Текст исключения может содержать тело запроса: в сообщение идёт только тип и код статуса.
+    """
+    status = getattr(exc, "status_code", None)
+    suffix = f", HTTP {status}" if status else ""
+    message = f"вызов модели не удался: {type(exc).__name__}{suffix}"
+    transient = isinstance(exc, connection_error) or (
+        status is not None and (status == 429 or status >= 500)
+    )
+    error = LLMUnavailableError if transient else LLMRejectedError
+    return error(message, upstream_status=status)
+
+
 class AnthropicClient:
     """Реальная модель. Не проверялся на живом API.
 
@@ -225,16 +240,7 @@ class AnthropicClient:
                 output_config={"format": {"type": "json_schema", "schema": schema}},
             )
         except anthropic.APIError as exc:
-            # Текст исключения может содержать тело запроса: в сообщение идёт только тип и код статуса.
-            status = getattr(exc, "status_code", None)
-            suffix = f", HTTP {status}" if status else ""
-            message = f"вызов модели не удался: {type(exc).__name__}{suffix}"
-            transient = isinstance(exc, anthropic.APIConnectionError) or (
-                status is not None and (status == 429 or status >= 500)
-            )
-            if transient:
-                raise LLMUnavailableError(message, upstream_status=status) from exc
-            raise LLMRejectedError(message, upstream_status=status) from exc
+            raise _api_failure(exc, anthropic.APIConnectionError) from exc
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         u = resp.usage
         cached = (getattr(u, "cache_creation_input_tokens", 0) or 0) + (
@@ -245,4 +251,73 @@ class AnthropicClient:
             input_tokens=(u.input_tokens or 0) + cached,
             output_tokens=u.output_tokens or 0,
             stop_reason=resp.stop_reason,
+        )
+
+
+# ---------- OpenAI ----------
+
+_SCHEMA_NAME = "evaluation"
+_OPENAI_INCOMPLETE = {"max_output_tokens": "max_tokens", "content_filter": "refusal"}
+
+
+def _openai_stop_reason(resp: Any) -> str:
+    """Статус ответа в значения stop_reason, которые понимает parse_reply."""
+    if resp.status == "incomplete":
+        reason = getattr(resp.incomplete_details, "reason", None)
+        return _OPENAI_INCOMPLETE.get(reason, "incomplete")
+    if resp.status != "completed":
+        return resp.status or "unknown"
+    for item in resp.output:
+        if item.type == "message" and any(part.type == "refusal" for part in item.content):
+            return "refusal"
+    return "end_turn"
+
+
+class OpenAIClient:
+    """Реальная модель через Responses API. Не проверялся на живом API.
+
+    store=False: диалоги не сохраняются на стороне OpenAI. Схема из wire.py подходит под strict без
+    правок: все поля в required, additionalProperties false, nullable через anyOf. Токены рассуждений
+    входят в output_tokens и в max_output_tokens. SDK сам повторяет 429 и 5xx (max_retries=2).
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        timeout: float = DEFAULT_TIMEOUT_SEC,
+        sdk_client: Any = None,
+    ) -> None:
+        if not model:
+            raise ValueError("модель не задана: выбор модели делается по сравнению на эталоне")
+        if sdk_client is None:
+            if not api_key:
+                raise ValueError("ключ API не задан")
+            import openai
+
+            sdk_client = openai.OpenAI(api_key=api_key, max_retries=2, timeout=timeout)
+        self._sdk = sdk_client
+        self.model = model
+
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResponse:
+        import openai
+
+        response_format = {"type": "json_schema", "name": _SCHEMA_NAME, "schema": schema, "strict": True}
+        try:
+            resp = self._sdk.responses.create(
+                model=self.model,
+                instructions=system,
+                input=user,
+                max_output_tokens=MAX_TOKENS,
+                store=False,
+                text={"format": response_format},
+            )
+        except openai.APIError as exc:
+            raise _api_failure(exc, openai.APIConnectionError) from exc
+        u = resp.usage
+        return LLMResponse(
+            text=resp.output_text,
+            input_tokens=getattr(u, "input_tokens", 0) or 0,
+            output_tokens=getattr(u, "output_tokens", 0) or 0,
+            stop_reason=_openai_stop_reason(resp),
         )

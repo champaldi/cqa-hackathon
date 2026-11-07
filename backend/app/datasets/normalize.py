@@ -1,8 +1,4 @@
-"""Приводит раздел data из API организаторов к модели Dialog.
-
-Исходные метки времени не меняются. Смещения реплик от начала диалога и записи
-считает задача backend/data-and-storage.
-"""
+"""Приводит раздел data из API организаторов к модели Dialog. Исходные метки времени не меняются."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -10,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from backend.app.contracts import Dialog, Turn
+from backend.app.datasets.timing import with_timing
 from backend.app.errors import DatasetError
 
 
@@ -24,7 +21,7 @@ def normalize_dataset(payload: Mapping[str, Any]) -> list[Dialog]:
 def _normalize_record(record: Any, group_id: str) -> Dialog:
     conversation_id = record.get("conversation_id") if isinstance(record, dict) else None
     try:
-        return Dialog(
+        dialog = Dialog(
             conversation_id=record["conversation_id"],
             dataset_group_id=group_id,
             channel=record["channel"],
@@ -37,3 +34,4 @@ def _normalize_record(record: Any, group_id: str) -> Dialog:
         )
     except (KeyError, TypeError, ValidationError):
         raise DatasetError(f"Запись {conversation_id or 'без id'}: неверный формат") from None
+    return with_timing(dialog)

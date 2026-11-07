@@ -3,7 +3,14 @@ from typing import Any
 from fastapi import APIRouter
 
 from backend.app.api.deps import ServicesDep, ok
-from backend.app.contracts import ApiResponse, Dialog, DialogSummary, ImportRequest, ImportResult
+from backend.app.contracts import (
+    ApiResponse,
+    AudioLink,
+    Dialog,
+    DialogSummary,
+    ImportRequest,
+    ImportResult,
+)
 
 router = APIRouter(prefix="/dialogs", tags=["dialogs"])
 
@@ -21,3 +28,8 @@ def import_group(request: ImportRequest, services: ServicesDep) -> dict[str, Any
 @router.get("/{conversation_id}", response_model=ApiResponse[Dialog])
 def get_dialog(conversation_id: str, services: ServicesDep) -> dict[str, Any]:
     return ok(services.get_dialog(conversation_id))
+
+
+@router.get("/{conversation_id}/audio", response_model=ApiResponse[AudioLink])
+def get_audio(conversation_id: str, services: ServicesDep) -> dict[str, Any]:
+    return ok(services.audio_link(conversation_id))

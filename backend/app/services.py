@@ -1,13 +1,16 @@
 """Сценарии приложения: связывают хранилище, оценщик и подсчёт баллов. Маршруты только вызывают их."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from backend.app.contracts import (
     Appeal,
     AppealCreate,
     AppealStatus,
+    AudioLink,
     BatchJob,
     BatchRequest,
     Checklist,
@@ -23,8 +26,11 @@ from backend.app.contracts import (
     HealthInfo,
     ImportResult,
 )
+from backend.app.datasets.audio import fetch_audio_duration, fetch_audio_link
+from backend.app.datasets.cache import read_group, write_group
 from backend.app.datasets.client import fetch_group
 from backend.app.datasets.normalize import normalize_dataset
+from backend.app.datasets.timing import with_audio_positions
 from backend.app.errors import (
     ConflictError,
     DatasetError,
@@ -82,11 +88,43 @@ class Services:
     def import_group(self, group_id: str) -> ImportResult:
         if not self.settings.dataset_url:
             raise DatasetNotConfiguredError("Не задан CQA_DATASET_URL: вставьте ссылку из гайда в файл .env")
-        payload = fetch_group(self.settings.dataset_url, group_id)
+        payload = self._fetch_group(group_id)
         received = payload.get("dataset_group_id")
         if received != group_id:
             raise DatasetError(f"Запрошен набор {group_id}, а API вернул {received}")
-        return ImportResult(group_id=group_id, imported=self.storage.save_dialogs(normalize_dataset(payload)))
+        dialogs = normalize_dataset(payload)
+        write_group(self.settings.cache_dir, group_id, payload)
+        with ThreadPoolExecutor(max_workers=self.settings.batch_concurrency) as pool:
+            placed = list(pool.map(self._place_on_recording, dialogs))
+        return ImportResult(group_id=group_id, imported=self.storage.save_dialogs(placed))
+
+    def audio_link(self, conversation_id: str) -> AudioLink:
+        dialog = self.get_dialog(conversation_id)
+        if dialog.audio_url is None:
+            raise NotFoundError(f"У диалога {conversation_id} нет записи")
+        return AudioLink(url=fetch_audio_link(dialog.audio_url))
+
+    def _fetch_group(self, group_id: str) -> dict[str, Any]:
+        """Сначала свежие данные из API. Копия нужна, только если API не ответил."""
+        try:
+            return fetch_group(self.settings.dataset_url, group_id)
+        except DatasetError as exc:
+            cached = read_group(self.settings.cache_dir, group_id)
+            if cached is None:
+                raise
+            logger.warning("Набор %s взят из кеша: %s", group_id, exc)
+            return cached
+
+    def _place_on_recording(self, dialog: Dialog) -> Dialog:
+        """Без длины записи импорт не падает: положение реплики остаётся в audio_tail_sec."""
+        if not self.settings.measure_audio or dialog.audio_url is None:
+            return dialog
+        try:
+            duration = fetch_audio_duration(dialog.audio_url)
+        except DatasetError as exc:
+            logger.warning("Длина записи %s не получена: %s", dialog.conversation_id, exc)
+            return dialog
+        return dialog if duration is None else with_audio_positions(dialog, duration)
 
     def _summary(self, dialog: Dialog) -> DialogSummary:
         summary = DialogSummary(
