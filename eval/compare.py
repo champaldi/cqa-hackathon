@@ -52,6 +52,8 @@ class GoldDialog:
     doubtful: frozenset[str]  # критерии со спорной разметкой
     total: float | None = None
     gross_error: bool | None = None
+    kz_checked_by: str | None = None  # кто проверил казахскую разметку
+    seen_model: bool = False  # разметчик видел ответы модели до разметки
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,8 @@ class Report:
     checklist_mismatch: list[str] = field(
         default_factory=list
     )  # модель оценивала по другому набору критериев
+    kz_checked: dict[str, str | None] = field(default_factory=dict)  # id казахского диалога -> кто проверил
+    seen_model: list[str] = field(default_factory=list)  # разметка не слепая
 
 
 # ---------- Разбор входа ----------
@@ -158,6 +162,8 @@ def load_gold(data: dict[str, Any]) -> list[GoldDialog]:
                 doubtful=frozenset(doubtful),
                 total=raw.get("total"),
                 gross_error=raw.get("gross_error"),
+                kz_checked_by=(raw.get("kz_checked_by") or "").strip() or None,
+                seen_model=bool(raw.get("seen_model_before_labeling")),
             )
         )
     return result
@@ -236,6 +242,10 @@ def compare(
 ) -> Report:
     report = Report()
     for item in gold:
+        if item.language == "KZ":
+            report.kz_checked[item.conversation_id] = item.kz_checked_by
+        if item.seen_model:
+            report.seen_model.append(item.conversation_id)
         found = model.get(item.conversation_id)
         if found is None:
             report.missing_dialogs.append(item.conversation_id)
@@ -322,6 +332,18 @@ def render(report: Report) -> str:
         lines.append(
             "Внимание: критерии чек-листа модели не совпадают с эталоном у "
             f"{', '.join(report.checklist_mismatch)}. Оцените эти диалоги заново по нужной версии."
+        )
+    if report.kz_checked:
+        checked = {cid: who for cid, who in report.kz_checked.items() if who}
+        unchecked = [cid for cid, who in report.kz_checked.items() if not who]
+        lines.append(f"Казахская разметка проверена: {len(checked)}/{len(report.kz_checked)}")
+        lines += [f"  {cid}: {who}" for cid, who in checked.items()]
+        if unchecked:
+            lines.append(f"  не проверены: {', '.join(unchecked)}")
+    if report.seen_model:
+        lines.append(
+            f"Разметка не слепая (разметчик видел ответы модели): {len(report.seen_model)} — "
+            f"{', '.join(report.seen_model)}"
         )
 
     for title, groups in (

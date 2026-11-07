@@ -256,3 +256,19 @@ def test_checklist_mismatch_is_reported(checklist: Checklist) -> None:
 
     assert report.checklist_mismatch == ["d1"]
     assert "не совпадают с эталоном у d1" in render(report)
+
+
+def test_kz_check_and_seen_model_are_reported(checklist: Checklist) -> None:
+    gold = [
+        gold_entry("kz1", ALL_MAX, "KZ", kz_checked_by="Карим, переводчик"),
+        gold_entry("kz2", ALL_MAX, "KZ"),
+        gold_entry("ru1", ALL_MAX, "RU", seen_model_before_labeling=True),
+    ]
+    report = run(gold, [card(cid, ALL_MAX, checklist) for cid in ("kz1", "kz2", "ru1")])
+
+    assert report.kz_checked == {"kz1": "Карим, переводчик", "kz2": None}
+    assert report.seen_model == ["ru1"]
+    text = render(report)
+    assert "Казахская разметка проверена: 1/2" in text
+    assert "не проверены: kz2" in text
+    assert "Разметка не слепая (разметчик видел ответы модели): 1 — ru1" in text
