@@ -17,6 +17,9 @@ def _read_json(path: Path) -> Any:
 
 
 def seed(storage: Storage) -> None:
+    """Заполняет только пустую базу, чтобы перезапуск не затирал сохранённые данные."""
+    if storage.list_checklists():
+        return
     draft = ChecklistDraft.model_validate(_read_json(CONFIG_DIR / "checklist.default.json"))
     storage.save_checklist(Checklist(**draft.model_dump(), id="checklist-v1", version=1))
     storage.save_dialogs(normalize_dataset(_read_json(CONFIG_DIR / "sample_dialogs.json")))

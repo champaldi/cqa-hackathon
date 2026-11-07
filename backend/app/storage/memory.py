@@ -1,7 +1,4 @@
-"""Хранилище-заглушка в памяти: данные живут до перезапуска.
-
-SQLite добавляет задача backend/data-and-storage. Новая реализация должна пройти те же тесты.
-"""
+"""Хранилище в памяти: данные живут до перезапуска. Приложение работает на sqlite.py."""
 
 from collections.abc import Iterable
 from threading import Lock
