@@ -9,7 +9,7 @@
         { "timestamp": "00:00", "speaker": "client", "text": "Как посмотреть комиссию за сделку?" },
         { "timestamp": "00:03", "speaker": "bot", "text": "Здравствуйте! Я виртуальный помощник. Соединить вас с оператором?" },
         { "timestamp": "00:10", "speaker": "client", "text": "Да" },
-        { "timestamp": "00:12", "speaker": "system", "text": "Эскалация на оператора." },
+        { "timestamp": "00:12", "speaker": "system", "text": "Диалог передан специалисту." },
         { "timestamp": "01:02", "speaker": "operator", "text": "Здравствуйте! Меня зовут Мира. Откройте раздел «Отчёты», там есть строка с комиссией по каждой сделке." },
         { "timestamp": "01:30", "speaker": "client", "text": "Нашёл, спасибо." },
         { "timestamp": "01:48", "speaker": "operator", "text": "Рада помочь. Могу подсказать что-то ещё? Хорошего дня!" }
@@ -24,9 +24,9 @@
         { "timestamp": "00:00", "speaker": "client", "text": "Тарифімді қайдан көруге болады?" },
         { "timestamp": "00:04", "speaker": "bot", "text": "Сәлеметсіз бе! Операторға қосайын ба?" },
         { "timestamp": "00:09", "speaker": "client", "text": "Иә" },
-        { "timestamp": "00:11", "speaker": "system", "text": "Чат операторға жіберілді." },
+        { "timestamp": "00:11", "speaker": "system", "text": "Сұрау маманға берілді." },
         { "timestamp": "00:58", "speaker": "operator", "text": "Сәлеметсіз бе, менің атым Айгүл. «Кабинет» бөлімін ашыңыз, тариф сол жерде жазылады." },
-        { "timestamp": "01:15", "speaker": "system", "text": "Клиентпен байланыс үзілді." }
+        { "timestamp": "01:15", "speaker": "system", "text": "Сессия кенеттен аяқталды." }
       ],
       "audio_url": null
     },
@@ -36,12 +36,12 @@
       "language": "EN",
       "transcript": [
         { "timestamp": "00:00", "speaker": "client", "text": "My deposit has not arrived. Can you check it?" },
-        { "timestamp": "00:05", "speaker": "bot", "text": "Hello! Would you like me to connect you with an agent?" },
+        { "timestamp": "00:05", "speaker": "bot", "text": "Hi there, I am the help assistant. Shall I bring in a specialist?" },
         { "timestamp": "00:08", "speaker": "client", "text": "Yes" },
-        { "timestamp": "00:10", "speaker": "system", "text": "Chat transferred to an agent." },
-        { "timestamp": "01:05", "speaker": "operator", "text": "Hi, I'm Sam. I understand this is worrying. I need to verify your identity before I check the account." },
+        { "timestamp": "00:10", "speaker": "system", "text": "Conversation handed over to a specialist." },
+        { "timestamp": "01:05", "speaker": "operator", "text": "Hello, this is Sam from the support desk. Waiting on a deposit is stressful, so let me confirm who you are first." },
         { "timestamp": "01:20", "speaker": "client", "text": "Sure, go ahead." },
-        { "timestamp": "01:40", "speaker": "system", "text": "Customer identity verified." },
+        { "timestamp": "01:40", "speaker": "system", "text": "Identity check passed." },
         { "timestamp": "02:10", "speaker": "operator", "text": "Thank you. The deposit is being processed and will arrive within one business day. Anything else I can help with? Goodbye!" }
       ],
       "audio_url": null
@@ -51,14 +51,14 @@
       "channel": "voice call",
       "language": "RU",
       "transcript": [
-        { "timestamp": "2026-01-15T10:00:00.1000000+00:00", "speaker": "system", "text": "Запись и транскрибирование запущены." },
-        { "timestamp": "2026-01-15T10:00:05.2000000+00:00", "speaker": "bot", "text": "Для выбора русского языка нажмите 2." },
-        { "timestamp": "2026-01-15T10:00:20.3000000+00:00", "speaker": "system", "text": "Запись и транскрибирование приостановлены." },
-        { "timestamp": "2026-01-15T10:00:30.3000000+00:00", "speaker": "system", "text": "Запись и транскрибирование возобновлены." },
-        { "timestamp": "2026-01-15T10:00:35.4000000+00:00", "speaker": "operator", "text": "Здравствуйте, меня зовут [Имя скрыто], чем могу помочь?" },
+        { "timestamp": "2026-01-15T10:00:00.1000000+00:00", "speaker": "system", "text": "Сессия звонка открыта." },
+        { "timestamp": "2026-01-15T10:00:05.2000000+00:00", "speaker": "bot", "text": "Чтобы продолжить на русском, выберите цифру два." },
+        { "timestamp": "2026-01-15T10:00:20.3000000+00:00", "speaker": "system", "text": "Фиксация разговора остановлена." },
+        { "timestamp": "2026-01-15T10:00:30.3000000+00:00", "speaker": "system", "text": "Фиксация разговора продолжена." },
+        { "timestamp": "2026-01-15T10:00:35.4000000+00:00", "speaker": "operator", "text": "Добрый день, на линии специалист поддержки Алина, слушаю вас." },
         { "timestamp": "2026-01-15T10:00:42.5000000+00:00", "speaker": "client", "text": "Подскажите, как вывести средства." },
         { "timestamp": "2026-01-15T10:01:05.6000000+00:00", "speaker": "operator", "text": "Откройте раздел поручений и выберите вывод средств. Всего доброго!" },
-        { "timestamp": "2026-01-15T10:01:10.7000000+00:00", "speaker": "system", "text": "Клиент завершил разговор." }
+        { "timestamp": "2026-01-15T10:01:10.7000000+00:00", "speaker": "system", "text": "Звонок окончен клиентом." }
       ],
       "audio_url": null
     }

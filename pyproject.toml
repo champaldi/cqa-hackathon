@@ -3,6 +3,9 @@ testpaths = ["backend/tests"]
 pythonpath = ["."]
 addopts = "--import-mode=importlib -q"
 
+[tool.coverage.run]
+source = ["backend/app", "scripts"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py313"

@@ -1,0 +1,46 @@
+"""Интерфейс хранилища. Сценарии зависят от него, а не от конкретной базы."""
+
+from collections.abc import Iterable
+from typing import Protocol
+
+from backend.app.contracts import Appeal, AppealStatus, BatchJob, Checklist, Dialog, Evaluation
+
+
+class Storage(Protocol):
+    def save_dialogs(self, dialogs: Iterable[Dialog]) -> int:
+        """Сохраняет диалоги и возвращает их число. Диалог с тем же id заменяется."""
+        ...
+
+    def list_dialogs(self, group_id: str | None = None) -> list[Dialog]: ...
+
+    def get_dialog(self, conversation_id: str) -> Dialog | None: ...
+
+    def save_checklist(self, checklist: Checklist) -> Checklist: ...
+
+    def list_checklists(self) -> list[Checklist]:
+        """Версии по возрастанию: последняя в списке считается активной."""
+        ...
+
+    def get_checklist(self, checklist_id: str) -> Checklist | None: ...
+
+    def save_evaluation(self, evaluation: Evaluation) -> Evaluation:
+        """Исходная оценка неизменна: повторное сохранение того же id вызывает ValueError."""
+        ...
+
+    def get_evaluation(self, evaluation_id: str) -> Evaluation | None: ...
+
+    def latest_evaluation(self, conversation_id: str) -> Evaluation | None: ...
+
+    def save_appeal(self, appeal: Appeal) -> Appeal: ...
+
+    def get_appeal(self, appeal_id: str) -> Appeal | None: ...
+
+    def list_appeals(
+        self, evaluation_id: str | None = None, status: AppealStatus | None = None
+    ) -> list[Appeal]:
+        """Апелляции в порядке подачи: при решении более поздняя перекрывает раннюю."""
+        ...
+
+    def save_job(self, job: BatchJob) -> BatchJob: ...
+
+    def get_job(self, job_id: str) -> BatchJob | None: ...
