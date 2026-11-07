@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Секреты и локальные настройки
+.env
+.claude/
+
+# Данные организаторов не коммитим: 5 звонков реальные, ссылки подписаны (sig)
+data/
+*.sqlite3
+
+# PDF содержат подписанную ссылку на API. Выжимка условий лежит в docs/BRIEF.md
+*.pdf
+
+# Node
+node_modules/
