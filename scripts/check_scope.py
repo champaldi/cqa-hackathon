@@ -1,6 +1,7 @@
 """Проверка зон: PR меняет только файлы своей роли.
 
-Роль определяется по префиксу ветки, владельцы файлов описаны в таблице OWNERS.
+Роль определяется по префиксу ветки или точному имени frontend.
+Владельцы файлов описаны в таблице OWNERS.
 Запуск: python scripts/check_scope.py --branch qa/gold-set --base origin/main
 
 Коды выхода: 0 нарушений нет, 1 есть чужие файлы, 2 проверку выполнить не удалось.
@@ -13,6 +14,7 @@ from collections.abc import Iterable, Sequence
 from typing import Final
 
 CONTRACT: Final = "contract"
+FRONTEND: Final = "frontend"
 ROLES: Final = frozenset({"backend", "llm", "ui", "qa"})
 NOBODY: Final[frozenset[str]] = frozenset()
 DEFAULT_OWNERS: Final = frozenset({"backend"})
@@ -24,8 +26,8 @@ OWNERS: Final[tuple[tuple[str, frozenset[str]], ...]] = (
     ("frontend/api.js", NOBODY),
     ("AGENTS.md", NOBODY),
     ("CLAUDE.md", NOBODY),
-    ("frontend/checklist/", frozenset({"qa"})),
-    ("frontend/", frozenset({"ui"})),
+    ("frontend/checklist/", frozenset({"qa", FRONTEND})),
+    ("frontend/", frozenset({"ui", FRONTEND})),
     ("backend/app/evaluator/", frozenset({"llm"})),
     ("backend/app/scoring/", frozenset({"qa"})),
     ("backend/tests/evaluator/", frozenset({"llm", "qa"})),
@@ -39,6 +41,8 @@ OWNERS: Final[tuple[tuple[str, frozenset[str]], ...]] = (
 
 
 def role_of(branch: str) -> str | None:
+    if branch == FRONTEND:
+        return FRONTEND
     prefix, _, name = branch.partition("/")
     known = prefix in ROLES or prefix == CONTRACT
     return prefix if known and name else None
@@ -55,7 +59,9 @@ def violations(branch: str, paths: Iterable[str]) -> list[str]:
     role = role_of(branch)
     if role is None:
         allowed = ", ".join(f"{prefix}/" for prefix in sorted({*ROLES, CONTRACT}))
-        raise ValueError(f"ветка {branch!r} без роли, нужен префикс: {allowed}")
+        raise ValueError(
+            f"ветка {branch!r} без роли, нужен префикс: {allowed} или точная ветка {FRONTEND!r}"
+        )
     if role == CONTRACT:
         return []
     return [path for path in paths if role not in owners_of(path)]
