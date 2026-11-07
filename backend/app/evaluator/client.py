@@ -1,28 +1,40 @@
-"""LLM-клиенты: протокол, MockClient для разработки без ключа и AnthropicClient."""
+"""Клиенты модели: протокол, MockClient для тестов и AnthropicClient.
+
+Скрытых умолчаний нет: клиент и цены передаются явно (см. factory.py).
+"""
 
 from __future__ import annotations
 
 import copy
-import os
+import json
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from .errors import LLMUnavailableError
+from ..contracts import Checklist, Criterion
+from .errors import LLMRejectedError, LLMUnavailableError
 from .render import unescape
-from .wire import TOOL_DESCRIPTION, TOOL_NAME
 
 
 @dataclass(frozen=True)
 class LLMResponse:
-    tool_input: dict[str, Any] | None  # None, если модель не вернула tool-блок
+    text: str  # текст ответа модели, ожидается JSON по схеме
     input_tokens: int
     output_tokens: int
-    model: str
+    stop_reason: str | None  # end_turn, max_tokens, refusal и т.д.
 
 
 class LLMClient(Protocol):
-    def complete(self, system: str, user: str, tool_schema: dict[str, Any]) -> LLMResponse: ...
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResponse: ...
+
+
+@dataclass(frozen=True)
+class Prices:
+    """USD за 1 млн токенов. Цена плоская: кеш промпта не учитывается."""
+
+    input_per_mtok: float = 0.0
+    output_per_mtok: float = 0.0
 
 
 # ---------- Mock ----------
@@ -33,9 +45,12 @@ FaultKind = Literal[
     "illegal_na",
     "missing_criterion",
     "duplicate_criterion",
-    "no_tool_block",
+    "bad_json",
+    "max_tokens",
+    "refusal",
 ]
 _TURN_LINE = re.compile(r"^\[(\d+)\] (client|operator|bot|system) \([^)]*\): (.*)$")
+_REPAIR_LINE = re.compile(r"^Критерии для исправления: (.*)\.$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -47,96 +62,109 @@ class Fault:
     calls: tuple[int, ...] | None = None
 
 
-class MockClient:
-    """Строит валидный ответ по схеме и транскрипту из user message, без знания конкретных критериев.
+def _evidence(kind: str, **fields: Any) -> dict[str, Any]:
+    base = {"kind": kind, "turn_index": None, "quote": None, "range_start": None, "range_end": None}
+    return base | fields
 
-    Проверяет программный поток, а не точность оценок LLM.
+
+class MockClient:
+    """Строит валидный ответ по чек-листу и транскрипту из user message.
+
+    Проверяет программный поток, а не точность оценок LLM. Счётчики защищены локом.
     """
 
     def __init__(
-        self, faults: tuple[Fault, ...] | list[Fault] = (), na_criteria: frozenset[str] = frozenset()
-    ):
+        self,
+        checklist: Checklist,
+        faults: tuple[Fault, ...] | list[Fault] = (),
+        na_criteria: frozenset[str] = frozenset(),
+    ) -> None:
+        self.checklist = checklist
         self.faults = tuple(faults)
         self.na_criteria = na_criteria
         self.requested: list[list[str]] = []  # id критериев по каждому вызову
         self.calls = 0
+        self._lock = threading.Lock()
 
-    def complete(self, system: str, user: str, tool_schema: dict[str, Any]) -> LLMResponse:
-        self.calls += 1
-        props: dict[str, Any] = tool_schema["properties"]
-        self.requested.append(list(props))
-        turns = self._parse_turns(user)
-        answers = {cid: self._valid_answer(cid, spec, turns) for cid, spec in props.items()}
-        tool_input: dict[str, Any] | None = answers
-        for fault in self.faults:
-            if fault.calls is None or self.calls in fault.calls:
-                tool_input = self._apply(fault, props, answers) if tool_input is not None else None
-        return LLMResponse(tool_input=tool_input, input_tokens=0, output_tokens=0, model="mock")
-
-    @staticmethod
-    def _parse_turns(user: str) -> list[tuple[int, str, str]]:
-        return [
-            (int(m[1]), m[2], unescape(m[3])) for line in user.splitlines() if (m := _TURN_LINE.match(line))
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResponse:
+        with self._lock:
+            self.calls += 1
+            n = self.calls
+            m = _REPAIR_LINE.search(user)
+            wanted = [x.strip() for x in m[1].split(",")] if m else [c.id for c in self.checklist.criteria]
+            self.requested.append(wanted)
+        turns = [
+            (int(t[1]), t[2], unescape(t[3])) for line in user.splitlines() if (t := _TURN_LINE.match(line))
         ]
+        results = [self._valid(c, turns) for c in self.checklist.criteria if c.id in wanted]
+        text, stop = None, "end_turn"
+        for fault in self.faults:
+            if fault.calls is None or n in fault.calls:
+                if fault.kind == "bad_json":
+                    text = "это не JSON"
+                elif fault.kind in ("max_tokens", "refusal"):
+                    stop = fault.kind
+                else:
+                    results = self._apply(fault, results)
+        if text is None:
+            text = json.dumps({"results": results}, ensure_ascii=False)
+        return LLMResponse(text=text, input_tokens=0, output_tokens=0, stop_reason=stop)
 
-    def _valid_answer(
-        self, cid: str, spec: dict[str, Any], turns: list[tuple[int, str, str]]
-    ) -> dict[str, Any]:
-        enum = spec["properties"]["answer"]["enum"]
-        scale_enum = spec["properties"]["scale_value"].get("enum")
-        na_ref = spec["properties"]["na_condition_ref"].get("enum", [None])[0]
-        first_op = next(((i, t) for i, s, t in turns if s == "operator" and t.strip()), None) or next(
+    def _valid(self, c: Criterion, turns: list[tuple[int, str, str]]) -> dict[str, Any]:
+        quotable = next(((i, t) for i, s, t in turns if s == "operator" and t.strip()), None) or next(
             ((i, t) for i, _, t in turns if t.strip()), None
         )
-        anchor = first_op[0] if first_op else (turns[0][0] if turns else 0)
-        if cid in self.na_criteria and "na" in enum:
-            return {
+        anchor = quotable[0] if quotable else (turns[0][0] if turns else 0)
+        head = {"criterion_id": c.id}
+        if c.id in self.na_criteria and c.allow_na:
+            return head | {
+                "evidence": [_evidence("na_reason", turn_index=anchor)],
+                "explanation": "Mock: условие неприменимости задано тестом.",
                 "answer": "na",
                 "scale_value": None,
-                "explanation": "Mock: условие неприменимости задано тестом.",
-                "evidence": [_evidence("na_reason", turn_index=anchor)],
-                "na_condition_ref": na_ref,
+                "na_condition_ref": c.na_condition,
             }
-        if first_op:
-            text = first_op[1].strip()
+        if quotable:
+            text = quotable[1].strip()
             chunk = text[:60].rsplit(" ", 1)[0] if len(text) > 60 and " " in text[:60] else text[:60]
-            evidence = [_evidence("quote", turn_index=first_op[0], quote=chunk)]
+            evidence = [_evidence("quote", turn_index=quotable[0], quote=chunk)]
         else:  # цитировать нечего: yes без цитаты невалиден, поэтому no по участку
-            last = turns[-1][0] if turns else 0
-            evidence = [_evidence("checked_range", range_start=0, range_end=last)]
-        return {
-            "answer": enum[0] if first_op or "no" not in enum else "no",
-            "scale_value": next((v for v in scale_enum or [] if v is not None), None),
-            "explanation": "Mock: ответ собран для проверки программного потока.",
+            evidence = [_evidence("checked_range", range_start=0, range_end=turns[-1][0] if turns else 0)]
+        if c.answer_type == "scale":
+            answer = "scale"
+        elif c.answer_type == "flag" or not quotable:
+            answer = "no"
+        else:
+            answer = "yes"
+        return head | {
             "evidence": evidence,
+            "explanation": "Mock: ответ собран для проверки программного потока.",
+            "answer": answer,
+            "scale_value": c.scale[0].value if answer == "scale" and c.scale else None,
             "na_condition_ref": None,
         }
 
-    @staticmethod
-    def _apply(fault: Fault, props: dict[str, Any], answers: dict[str, Any]) -> dict[str, Any] | None:
-        if fault.kind == "no_tool_block":
-            return None
+    def _apply(self, fault: Fault, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_id = {c.id: c for c in self.checklist.criteria}
 
-        def eligible(cid: str) -> bool:
-            spec = props[cid]["properties"]
+        def eligible(item: dict[str, Any]) -> bool:
+            c = by_id[item["criterion_id"]]
             if fault.kind == "bad_scale_step":
-                return spec["scale_value"].get("enum") is not None
+                return bool(c.scale)
             if fault.kind == "illegal_na":
-                return "na" not in spec["answer"]["enum"]
+                return not c.allow_na
             return True
 
-        candidates = [c for c in props if eligible(c)]
+        candidates = [r["criterion_id"] for r in results if eligible(r)]
         target = fault.criterion_id if fault.criterion_id in candidates else None
         if target is None and fault.criterion_id is None and candidates:
             target = candidates[0]
         if target is None:
-            return answers
-        broken = copy.deepcopy(answers)
-        item = broken[target]
+            return results
+        broken = copy.deepcopy(results)
+        item = next(r for r in broken if r["criterion_id"] == target)
         if fault.kind == "bad_scale_step":
-            item["scale_value"] = (
-                max(v for v in props[target]["properties"]["scale_value"]["enum"] if v is not None) + 1
-            )
+            item["scale_value"] = max(s.value for s in by_id[target].scale or []) + 1
         elif fault.kind == "fake_quote":
             item["evidence"] = [
                 _evidence("quote", turn_index=0, quote="выдуманная цитата, которой нет в диалоге")
@@ -145,105 +173,76 @@ class MockClient:
             item.update(answer="na", scale_value=None, na_condition_ref="любое условие")
             item["evidence"] = [_evidence("na_reason", turn_index=0)]
         elif fault.kind == "missing_criterion":
-            del broken[target]
+            broken.remove(item)
         elif fault.kind == "duplicate_criterion":
-            broken[f"{target}__dup"] = copy.deepcopy(item)
+            broken.append(copy.deepcopy(item))
         return broken
-
-
-def _evidence(kind: str, **fields: Any) -> dict[str, Any]:
-    base = {"kind": kind, "turn_index": None, "quote": None, "range_start": None, "range_end": None}
-    return base | fields
 
 
 # ---------- Anthropic ----------
 
-DEFAULT_TIMEOUT_SEC = 60.0
-MAX_TOKENS = 8192
+DEFAULT_TIMEOUT_SEC = 120.0
+MAX_TOKENS = 8192  # thinking на Opus 5.5 не выключается и входит в max_tokens
+_REJECTED_STATUSES = frozenset({400, 401, 403, 404})
 
 
 class AnthropicClient:
-    """Реальная модель. Включается только при CQA_EVALUATOR=llm. Не проверялся на живом API.
+    """Реальная модель. Не проверялся на живом API.
 
-    Параметры вызова ограничены сигнатурой anthropic==2.6.0 (там нет temperature).
+    Параметры вызова ограничены сигнатурой anthropic==2.6.0: нет temperature, нет tool_choice,
+    структура ответа задаётся через output_config. cache_control не используется: цена плоская.
+    SDK сам повторяет 429 и 5xx (max_retries=2). В llm_calls (считает core) попадают только вызовы
+    с полученным ответом, исчерпанные транспортные попытки не считаются.
     """
 
     def __init__(
         self,
         model: str,
-        api_key: str | None = None,
+        api_key: str,
         timeout: float = DEFAULT_TIMEOUT_SEC,
         sdk_client: Any = None,
     ) -> None:
         if not model:
-            raise ValueError("CQA_LLM_MODEL не задан: модель по умолчанию не выбрана до сравнения на эталоне")
+            raise ValueError("модель не задана: выбор модели делается по сравнению на эталоне")
         if sdk_client is None:
+            if not api_key:
+                raise ValueError("ключ API не задан")
             import anthropic
 
             sdk_client = anthropic.Anthropic(api_key=api_key, max_retries=2, timeout=timeout)
         self._sdk = sdk_client
         self.model = model
 
-    @classmethod
-    def from_env(cls) -> AnthropicClient:
-        return cls(
-            model=os.environ.get("CQA_LLM_MODEL", ""),
-            api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
-            timeout=float(os.environ.get("CQA_LLM_TIMEOUT_SEC") or DEFAULT_TIMEOUT_SEC),
-        )
-
-    def complete(self, system: str, user: str, tool_schema: dict[str, Any]) -> LLMResponse:
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResponse:
         import anthropic
 
         try:
             resp = self._sdk.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                system=system,
                 messages=[{"role": "user", "content": user}],
-                tools=[{"name": TOOL_NAME, "description": TOOL_DESCRIPTION, "input_schema": tool_schema}],
-                tool_choice={"type": "tool", "name": TOOL_NAME},
+                output_config={"format": {"type": "json_schema", "schema": schema}},
             )
         except anthropic.APIError as exc:
-            # Текст исключения может содержать тело запроса, поэтому в сообщение идёт только тип.
+            # Текст исключения может содержать тело запроса: в сообщение идёт только тип и код статуса.
             status = getattr(exc, "status_code", None)
             suffix = f", HTTP {status}" if status else ""
-            raise LLMUnavailableError(
-                f"вызов модели не удался: {type(exc).__name__}{suffix}", status_code=status
-            ) from exc
-        tool_input = next(
-            (b.input for b in resp.content if getattr(b, "type", None) == "tool_use" and b.name == TOOL_NAME),
-            None,
-        )
+            message = f"вызов модели не удался: {type(exc).__name__}{suffix}"
+            transient = isinstance(exc, anthropic.APIConnectionError) or (
+                status is not None and (status == 429 or status >= 500)
+            )
+            if transient:
+                raise LLMUnavailableError(message, status_code=status) from exc
+            raise LLMRejectedError(message, status_code=status) from exc
+        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         u = resp.usage
         cached = (getattr(u, "cache_creation_input_tokens", 0) or 0) + (
             getattr(u, "cache_read_input_tokens", 0) or 0
         )
         return LLMResponse(
-            tool_input=tool_input if isinstance(tool_input, dict) else None,
+            text=text,
             input_tokens=(u.input_tokens or 0) + cached,
             output_tokens=u.output_tokens or 0,
-            model=getattr(resp, "model", None) or self.model,
-        )
-
-
-def make_client() -> LLMClient:
-    mode = os.environ.get("CQA_EVALUATOR", "mock")
-    if mode == "mock":
-        return MockClient()
-    if mode == "llm":
-        return AnthropicClient.from_env()
-    raise ValueError(f"CQA_EVALUATOR: ожидается mock или llm, получено {mode!r}")
-
-
-@dataclass(frozen=True)
-class Prices:
-    input_per_mtok: float = 0.0
-    output_per_mtok: float = 0.0
-
-    @classmethod
-    def from_env(cls) -> Prices:
-        return cls(
-            input_per_mtok=float(os.environ.get("CQA_PRICE_INPUT_PER_MTOK") or 0),
-            output_per_mtok=float(os.environ.get("CQA_PRICE_OUTPUT_PER_MTOK") or 0),
+            stop_reason=resp.stop_reason,
         )
