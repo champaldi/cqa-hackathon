@@ -271,6 +271,12 @@ class ImportResult(Frozen):
     imported: int
 
 
+class AudioLink(Frozen):
+    """Свежая ссылка на запись звонка, её запрашивают перед прослушиванием."""
+
+    url: str
+
+
 class EvaluateRequest(Frozen):
     conversation_id: str
     checklist_id: str | None = None  # None - активный чек-лист

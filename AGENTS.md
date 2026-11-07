@@ -27,7 +27,7 @@ pytest
 ruff check .
 ```
 
-Заглушки работают без ключа модели: `CQA_EVALUATOR=mock`. Настоящая модель пока не подключена: с `CQA_EVALUATOR=llm` приложение не запустится, это задача `llm/evaluator-core`.
+Заглушки работают без ключа модели: `CQA_EVALUATOR=mock`. Для настоящей модели нужны `CQA_EVALUATOR=llm` и ключ, режим работает после слияния `llm/evaluator-core`.
 
 ## Первый шаг
 
@@ -109,6 +109,8 @@ python scripts/check_scope.py --branch <ваша ветка> --base origin/main
 | `GET /api/dialogs` | `?group_id=` | `DialogSummary[]` |
 | `GET /api/dialogs/{id}` | | `Dialog` |
 | `POST /api/dialogs/import` | `{group_id}` | `{group_id, imported}` |
+| `POST /api/dialogs/upload` | multipart: `file`, `group_id` | `{group_id, imported}`, маршрут появится в `backend/control-ready` |
+| `GET /api/dialogs/{id}/audio` | | `{url}`, маршрут появится в `backend/data-and-storage` |
 | `GET /api/checklists` | | `Checklist[]` |
 | `GET /api/checklists/active` | | `Checklist` |
 | `GET /api/checklists/{id}` | | `Checklist` |

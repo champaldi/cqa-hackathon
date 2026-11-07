@@ -48,6 +48,13 @@ async function post(path, body) {
   return unwrap(await send(buildUrl(path), options));
 }
 
+// Content-Type не задаём: браузер сам поставит multipart с границей.
+async function postForm(path, fields) {
+  const form = new FormData();
+  Object.entries(fields).forEach(([name, value]) => form.append(name, value));
+  return unwrap(await send(buildUrl(path), { method: "POST", body: form }));
+}
+
 const part = encodeURIComponent;
 
 export const api = {
@@ -56,6 +63,8 @@ export const api = {
   listDialogs: (groupId) => get("api/dialogs", { group_id: groupId }),
   getDialog: (id) => get(`api/dialogs/${part(id)}`),
   importGroup: (groupId) => post("api/dialogs/import", { group_id: groupId }),
+  uploadDialogs: (file, groupId) => postForm("api/dialogs/upload", { file, group_id: groupId }),
+  dialogAudio: (id) => get(`api/dialogs/${part(id)}/audio`),
 
   listChecklists: () => get("api/checklists"),
   activeChecklist: () => get("api/checklists/active"),

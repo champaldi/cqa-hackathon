@@ -23,6 +23,11 @@ jobs:
         run: ruff check .
       - name: Test
         run: pytest --cov=backend/app --cov=scripts --cov-fail-under=80
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Frontend tests
+        run: node --test "frontend/tests/*.test.mjs"
 
   scope:
     if: github.event_name == 'pull_request'
