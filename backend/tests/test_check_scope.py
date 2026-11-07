@@ -18,6 +18,12 @@ from scripts.check_scope import changed_files, main, role_of, violations
         ("llm/evaluator-core", "backend/tests/evaluator/test_llm.py"),
         ("ui/review-card", "frontend/screens/card.js"),
         ("ui/review-card", "frontend/styles.css"),
+        ("frontend", "frontend/app.js"),
+        ("frontend", "frontend/styles.css"),
+        ("frontend", "frontend/screens/card.js"),
+        ("frontend", "frontend/checklist/editor.js"),
+        ("frontend", "frontend/checklist/model.js"),
+        ("frontend", "frontend/tests/checklist-model.test.mjs"),
         ("qa/scoring-engine", "backend/app/scoring/engine.py"),
         ("qa/scoring-engine", "backend/tests/api/test_appeals.py"),
         ("qa/checklist-editor", "frontend/checklist/editor.js"),
@@ -43,6 +49,14 @@ def test_role_can_change_its_own_zone(branch: str, path: str) -> None:
         ("ui/review-card", "backend/app/main.py"),
         ("qa/checklist-editor", "frontend/app.js"),
         ("qa/scoring-engine", "backend/app/services.py"),
+        ("frontend", "backend/app/main.py"),
+        ("frontend", "backend/tests/test_check_scope.py"),
+        ("frontend", "config/checklist.default.json"),
+        ("frontend", ".github/workflows/ci.yml"),
+        ("frontend", "scripts/check_scope.py"),
+        ("frontend", "requirements.txt"),
+        ("frontend", "README.md"),
+        ("frontend", "docs/BRIEF.md"),
     ],
 )
 def test_role_cannot_change_a_foreign_zone(branch: str, path: str) -> None:
@@ -52,7 +66,7 @@ def test_role_cannot_change_a_foreign_zone(branch: str, path: str) -> None:
 @pytest.mark.parametrize(
     "path", ["backend/app/contracts.py", "frontend/api.js", "AGENTS.md", "CLAUDE.md"]
 )
-@pytest.mark.parametrize("branch", ["backend/x", "llm/x", "ui/x", "qa/x"])
+@pytest.mark.parametrize("branch", ["backend/x", "llm/x", "ui/x", "qa/x", "frontend"])
 def test_shared_contract_is_closed_for_every_role(branch: str, path: str) -> None:
     assert violations(branch, [path]) == [path]
 
@@ -63,20 +77,30 @@ def test_contract_branch_can_change_anything() -> None:
     assert violations("contract/skeleton", paths) == []
 
 
+def test_frontend_is_a_distinct_exact_branch_role() -> None:
+    assert role_of("frontend") == "frontend"
+    assert role_of("frontend/feature") is None
+    assert role_of("Frontend") is None
+    assert check_scope.owners_of("frontend/api.js") == frozenset()
+
+
 def test_only_foreign_paths_are_reported() -> None:
     paths = ["frontend/app.js", "backend/app/main.py"]
 
     assert violations("ui/review-card", paths) == ["backend/app/main.py"]
 
 
-@pytest.mark.parametrize("branch", ["main", "feature/x", "backendx/y", "qa"])
+@pytest.mark.parametrize(
+    "branch", ["main", "feature/x", "backendx/y", "qa", "frontend/feature", "Frontend"]
+)
 def test_branch_without_role_prefix_has_no_role(branch: str) -> None:
     assert role_of(branch) is None
 
 
-def test_unknown_branch_is_an_error() -> None:
+@pytest.mark.parametrize("branch", ["feature/x", "frontend/feature", "Frontend"])
+def test_unknown_branch_is_an_error(branch: str) -> None:
     with pytest.raises(ValueError, match="префикс"):
-        violations("feature/x", ["README.md"])
+        violations(branch, ["README.md"])
 
 
 def run_cli(branch: str) -> int:

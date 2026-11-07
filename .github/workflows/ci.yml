@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, frontend, 'backend/frontend-ci']
   pull_request:
 
 permissions:
@@ -24,13 +24,15 @@ jobs:
       - name: Test
         run: pytest --cov=backend/app --cov=scripts --cov-fail-under=80
       - uses: actions/setup-node@v6
+        if: hashFiles('frontend/tests/*.test.mjs') != ''
         with:
           node-version: "24"
       - name: Frontend tests
+        if: hashFiles('frontend/tests/*.test.mjs') != ''
         run: node --test "frontend/tests/*.test.mjs"
 
   scope:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_name != 'main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,6 +44,6 @@ jobs:
       - name: Check role scope
         # Имя ветки это недоверенный ввод: только через env, не подставлять в run напрямую.
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: python scripts/check_scope.py --branch "$HEAD_REF" --base "origin/$BASE_REF"
