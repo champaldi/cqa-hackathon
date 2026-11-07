@@ -1,0 +1,98 @@
+/* Токены оформления. Цвета и размеры задаются только здесь, styles.css их использует. */
+
+:root {
+  /* Шрифт Segoe UI выбран сознательно: интерфейс переезжает в Dynamics 365. */
+  --font-ui: "Segoe UI", system-ui, sans-serif;
+  --font-code: Consolas, ui-monospace, monospace;
+
+  --color-header: #123a2f;
+  --color-header-raised: #1c5140;
+  --color-header-ink: #f1f6f3;
+  --color-header-ink-muted: #b6cdc3;
+  --color-bg: #edf1f4;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f4f6f8;
+  --color-surface-hover: #eef2f4;
+  --color-surface-active: #e1e7eb;
+  --color-line: #d7dfe4;
+  --color-line-soft: #e8edf0;
+  --color-line-strong: #a9b6be;
+  --color-ink: #17242b;
+  --color-ink-muted: #52626b;
+  --color-accent: #0f6b55;
+  --color-accent-hover: #0c5844;
+  --color-accent-active: #094534;
+  --color-accent-ink: #ffffff;
+  --color-focus: #1f6fd1;
+  --color-disabled: #8d9aa2;
+
+  /* Цвет несёт смысл: выполнено, не выполнено, частично, N/A, грубая ошибка. */
+  --color-pass: #12653f;
+  --color-pass-bg: #e1f3e9;
+  --color-pass-rail: #2c9c68;
+  --color-fail: #a33a14;
+  --color-fail-bg: #fdede4;
+  --color-fail-rail: #dd6a30;
+  --color-partial: #735300;
+  --color-partial-bg: #fbf2d5;
+  --color-partial-rail: #c99a1a;
+  --color-na: #47596c;
+  --color-na-bg: #e7edf3;
+  --color-na-rail: #93a5b6;
+  --color-gross: #9c1030;
+  --color-gross-ink: #ffffff;
+  --color-open: #1a5894;
+  --color-open-bg: #e2eefa;
+
+  --color-hit: #ffeeb0;
+  --color-range: #dcebfb;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.375rem;
+  --text-xl: 1.625rem;
+  --text-score: 3.5rem;
+  --leading-tight: 1.2;
+  --leading-body: 1.45;
+  --tracking-tight: -0.02em;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --line: 1px;
+  --rail: 3px;
+  --focus-ring: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --control-height: 2rem;
+  --control-height-sm: 1.625rem;
+  --tag-height: 1.375rem;
+  --meter-height: 0.3125rem;
+  --header-height: 3rem;
+  --page-gutter: var(--space-4);
+  --page-max: 100rem;
+  --field-width: 16rem;
+  --section-min: 13rem;
+  --table-min: 42rem;
+  --title-min: 12rem;
+  --fragment-height: 22rem;
+  --transcript-chrome: 4.5rem;
+
+  --layer-top: 10;
+  --duration-fast: 120ms;
+  --duration-normal: 260ms;
+}
+
+@media (min-width: 1024px) {
+  :root { --page-gutter: var(--space-5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --duration-fast: 0ms; --duration-normal: 0ms; }
+}
