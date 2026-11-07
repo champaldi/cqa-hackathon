@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 
 from ..contracts import Checklist, CriterionResult, Dialog, EvaluatorOutput, Usage
-from .client import LLMClient, Prices
+from .client import LLMClient, LLMResponse, Prices
 from .errors import CriterionError, EvaluationError, NoOperatorTurnsError, ValidationFailedError
 from .prompt import build_repair_message, build_system_prompt, build_user_message
 from .validate import has_cyrillic, validate_complete
@@ -24,11 +25,46 @@ def _usage(model: str, calls: int, tokens_in: int, tokens_out: int, prices: Pric
     )
 
 
+def _fmt(value: int | None) -> str:
+    return "n/a" if value is None else str(value)
+
+
+@dataclass
+class _Meter:
+    """Фактический расход сверх Usage: кеш, рассуждения, модель и тариф по ответам провайдера.
+
+    Контракт Usage не расширяется, поэтому это только лог. Суммы input_tokens и output_tokens из ответов
+    уже содержат cached_tokens и reasoning_tokens, здесь они лишь разбивка и ни к чему не прибавляются.
+    None значит, что ни один ответ не вернул поле. Состояние живёт один вызов evaluate.
+    """
+
+    cached: int | None = None
+    reasoning: int | None = None
+    served_models: list[str] = field(default_factory=list)
+    service_tiers: list[str] = field(default_factory=list)
+
+    def add(self, resp: LLMResponse) -> None:
+        if resp.cached_tokens is not None:
+            self.cached = (self.cached or 0) + resp.cached_tokens
+        if resp.reasoning_tokens is not None:
+            self.reasoning = (self.reasoning or 0) + resp.reasoning_tokens
+        if resp.served_model and resp.served_model not in self.served_models:
+            self.served_models.append(resp.served_model)
+        if resp.service_tier and resp.service_tier not in self.service_tiers:
+            self.service_tiers.append(resp.service_tier)
+
+    def describe(self) -> str:
+        return (
+            f"served_models={','.join(self.served_models) or 'n/a'} cached_tokens={_fmt(self.cached)} "
+            f"reasoning_tokens={_fmt(self.reasoning)} service_tiers={','.join(self.service_tiers) or 'n/a'}"
+        )
+
+
 def _codes(errs: list[CriterionError]) -> str:
     return ",".join(f"{e.criterion_id or '-'}:{e.code}" for e in errs) or "-"
 
 
-def _log_done(dialog: Dialog, status: str, usage: Usage, detail: str) -> None:
+def _log_done(dialog: Dialog, status: str, usage: Usage, detail: str, meter: _Meter) -> None:
     """Итог оценки: id диалога, статус, коды и расход. Реплик, цитат и ответа модели здесь нет.
 
     Неудача пишется одной строкой WARNING, успех INFO.
@@ -37,7 +73,7 @@ def _log_done(dialog: Dialog, status: str, usage: Usage, detail: str) -> None:
     log.log(
         level,
         "evaluator_done conversation_id=%s status=%s model=%s llm_calls=%d input_tokens=%d "
-        "output_tokens=%d cost_usd=%.6f detail=%s",
+        "output_tokens=%d cost_usd=%.6f %s detail=%s",
         dialog.conversation_id,
         status,
         usage.model,
@@ -45,6 +81,7 @@ def _log_done(dialog: Dialog, status: str, usage: Usage, detail: str) -> None:
         usage.input_tokens,
         usage.output_tokens,
         usage.cost_usd,
+        meter.describe(),
         detail,
     )
 
@@ -74,6 +111,7 @@ def evaluate(
     pending = list(checklist.criteria)
     errors: dict[str, list[CriterionError]] = {}
     calls = tokens_in = tokens_out = 0
+    meter = _Meter()
 
     for attempt in range(max_repair_rounds + 1):
         user = build_user_message(dialog) if attempt == 0 else build_repair_message(dialog, errors)
@@ -83,19 +121,21 @@ def evaluate(
         except EvaluationError as exc:
             exc.usage = _usage(model, calls, tokens_in, tokens_out, prices)
             detail = f"upstream_status={getattr(exc, 'upstream_status', None)}"
-            _log_done(dialog, type(exc).__name__, exc.usage, detail)
+            _log_done(dialog, type(exc).__name__, exc.usage, detail, meter)
             raise
         latency_ms = int((time.perf_counter() - started) * 1000)
         calls += 1
         tokens_in += resp.input_tokens
         tokens_out += resp.output_tokens
+        meter.add(resp)
 
         outcome = parse_reply(resp.text, resp.stop_reason, pending, turns, known_ids=known_ids)
         valid.update(outcome.ok)
         errors = outcome.errors
         log.info(
             "evaluator_call conversation_id=%s attempt=%d criteria=%s stop_reason=%s error_codes=%s "
-            "input_tokens=%d output_tokens=%d latency_ms=%d",
+            "input_tokens=%d output_tokens=%d cached_tokens=%s reasoning_tokens=%s served_model=%s "
+            "service_tier=%s latency_ms=%d",
             dialog.conversation_id,
             attempt,
             ",".join(c.id for c in pending),
@@ -103,6 +143,10 @@ def evaluate(
             _codes([e for errs in errors.values() for e in errs]),
             resp.input_tokens,
             resp.output_tokens,
+            _fmt(resp.cached_tokens),
+            _fmt(resp.reasoning_tokens),
+            resp.served_model or "n/a",
+            resp.service_tier or "n/a",
             latency_ms,
         )
         pending = [c for c in pending if c.id in errors]
@@ -112,13 +156,13 @@ def evaluate(
     usage = _usage(model, calls, tokens_in, tokens_out, prices)
     if pending:
         failed = [e for errs in errors.values() for e in errs]
-        _log_done(dialog, "validation_failed", usage, _codes(failed))
+        _log_done(dialog, "validation_failed", usage, _codes(failed), meter)
         raise ValidationFailedError(failed, usage)
 
     results = [valid[c.id] for c in checklist.criteria]
     final_errors = validate_complete(results, checklist, turns)
     if final_errors:
-        _log_done(dialog, "validation_failed", usage, _codes(final_errors))
+        _log_done(dialog, "validation_failed", usage, _codes(final_errors), meter)
         raise ValidationFailedError(final_errors, usage)
     for r in results:
         if not has_cyrillic(r.explanation):  # мягкая проверка: RU требуется промптом, результат не режем
@@ -127,7 +171,7 @@ def evaluate(
                 dialog.conversation_id,
                 r.criterion_id,
             )
-    _log_done(dialog, "ok", usage, "-")
+    _log_done(dialog, "ok", usage, "-", meter)
     return EvaluatorOutput(results=results, usage=usage)
 
 

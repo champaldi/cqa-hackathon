@@ -23,6 +23,13 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     stop_reason: str | None  # end_turn, max_tokens, refusal и т.д.
+    # Необязательные поля для измерения фактического расхода. None: провайдер не вернул значение.
+    # input_tokens и output_tokens в ответе провайдера уже включают их части: cached_tokens это доля
+    # input_tokens, reasoning_tokens доля output_tokens. К суммам их не прибавляют и не вычитают.
+    served_model: str | None = None  # модель, которая реально ответила (не имя из настроек)
+    cached_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    service_tier: str | None = None
 
 
 class LLMClient(Protocol):
@@ -35,6 +42,25 @@ class Prices:
 
     input_per_mtok: float = 0.0
     output_per_mtok: float = 0.0
+
+
+_SAFE_TEXT = re.compile(r"[^\w.:/+-]")
+
+
+def _label(value: Any) -> str | None:
+    """Короткая метка от провайдера (модель, тариф) для лога: только безопасные символы."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return _SAFE_TEXT.sub("?", value.strip())[:64]
+
+
+def _count(source: Any, *path: str) -> int | None:
+    """Целое число по цепочке полей ответа SDK или None, если поля нет или оно не число."""
+    for name in path:
+        source = getattr(source, name, None)
+        if source is None:
+            return None
+    return source if isinstance(source, int) and not isinstance(source, bool) else None
 
 
 # ---------- Mock ----------
@@ -78,10 +104,13 @@ class MockClient:
         checklist: Checklist,
         faults: tuple[Fault, ...] | list[Fault] = (),
         na_criteria: frozenset[str] = frozenset(),
+        response_fields: dict[str, Any] | None = None,
     ) -> None:
         self.checklist = checklist
         self.faults = tuple(faults)
         self.na_criteria = na_criteria
+        # Поля LLMResponse для каждого ответа (токены, served_model и т.д.): проверка учёта расхода.
+        self.response_fields = dict(response_fields or {})
         self.requested: list[list[str]] = []  # id критериев по каждому вызову
         self.calls = 0
         self._lock = threading.Lock()
@@ -108,7 +137,8 @@ class MockClient:
                     results = self._apply(fault, results)
         if text is None:
             text = json.dumps({"results": results}, ensure_ascii=False)
-        return LLMResponse(text=text, input_tokens=0, output_tokens=0, stop_reason=stop)
+        fields: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0} | self.response_fields
+        return LLMResponse(text=text, stop_reason=stop, **fields)
 
     def _valid(self, c: Criterion, turns: list[tuple[int, str, str]]) -> dict[str, Any]:
         quotable = next(((i, t) for i, s, t in turns if s == "operator" and t.strip()), None) or next(
@@ -248,9 +278,12 @@ class AnthropicClient:
         )
         return LLMResponse(
             text=text,
-            input_tokens=(u.input_tokens or 0) + cached,
+            input_tokens=(u.input_tokens or 0) + cached,  # у Anthropic input_tokens не включает кеш
             output_tokens=u.output_tokens or 0,
             stop_reason=resp.stop_reason,
+            served_model=_label(getattr(resp, "model", None)),
+            cached_tokens=_count(u, "cache_read_input_tokens"),
+            service_tier=_label(getattr(u, "service_tier", None)),
         )
 
 
@@ -315,9 +348,15 @@ class OpenAIClient:
         except openai.APIError as exc:
             raise _api_failure(exc, openai.APIConnectionError) from exc
         u = resp.usage
+        # input_tokens уже включает cached_tokens, output_tokens уже включает reasoning_tokens
+        # (в SDK это «breakdown» своих сумм). Поэтому суммы берутся как есть, без вычитания и сложения.
         return LLMResponse(
             text=resp.output_text,
             input_tokens=getattr(u, "input_tokens", 0) or 0,
             output_tokens=getattr(u, "output_tokens", 0) or 0,
             stop_reason=_openai_stop_reason(resp),
+            served_model=_label(getattr(resp, "model", None)),
+            cached_tokens=_count(u, "input_tokens_details", "cached_tokens"),
+            reasoning_tokens=_count(u, "output_tokens_details", "reasoning_tokens"),
+            service_tier=_label(getattr(resp, "service_tier", None)),
         )
