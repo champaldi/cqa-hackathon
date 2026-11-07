@@ -1,73 +1,78 @@
-"""Внутренний wire-формат tool'а модели: схема из Checklist и разбор ответа."""
+"""Wire-формат ответа модели: единая JSON-схема элемента и разбор текста в CriterionResult."""
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..contracts import Criterion, CriterionResult, Turn
+from ..contracts import Checklist, Criterion, CriterionResult, Turn
 from . import errors as E
 from .errors import CriterionError
-from .validate import ANSWER_KEYS, check_answer
+from .validate import check_answer
 
-TOOL_NAME = "submit_evaluation"
-TOOL_DESCRIPTION = "Отправить оценку оператора по критериям чек-листа."
+_FENCE = re.compile(r"^```[a-zA-Z]*\s*\n?(.*?)\n?```$", re.DOTALL)
 
-_NULLABLE_INT = {"type": ["integer", "null"]}
-_EVIDENCE_SCHEMA = {
+
+def _nullable(kind: str) -> dict[str, Any]:
+    return {"anyOf": [{"type": kind}, {"type": "null"}]}
+
+
+_EVIDENCE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "required": ["kind", "turn_index", "quote", "range_start", "range_end"],
     "properties": {
         "kind": {"type": "string", "enum": ["quote", "checked_range", "na_reason"]},
-        "turn_index": _NULLABLE_INT,
-        "quote": {"type": ["string", "null"]},
-        "range_start": _NULLABLE_INT,
-        "range_end": _NULLABLE_INT,
+        "turn_index": _nullable("integer"),
+        "quote": _nullable("string"),
+        "range_start": _nullable("integer"),
+        "range_end": _nullable("integer"),
     },
 }
 
 
-def criterion_schema(criterion: Criterion) -> dict[str, Any]:
-    # Порядок enum: первым идёт безопасный ответ по умолчанию (для flag это "no").
-    answers = (
-        ["scale"]
-        if criterion.answer_type == "scale"
-        else (["no", "yes"] if criterion.answer_type == "flag" else ["yes", "no"])
-    )
-    if criterion.allow_na:
-        answers.append("na")
-    scale_schema: dict[str, Any] = (
-        {"enum": [s.value for s in criterion.scale or []] + [None]}
-        if criterion.answer_type == "scale"
-        else {"type": "null"}
-    )
-    na_ref: dict[str, Any] = (
-        {"enum": [criterion.na_condition, None]} if criterion.allow_na else {"type": "null"}
-    )
-    return {
+def build_output_schema(checklist: Checklist) -> dict[str, Any]:
+    """Схема для output_config: {"results": [элемент]}, одна схема элемента на все критерии.
+
+    Порядок полей важен: сначала основание (evidence, explanation), потом ответ. Допустимость
+    answer, шагов шкалы и N/A проверяет validate.py, а не схема: схема остаётся неизменной
+    между попытками (кеш) и укладывается в лимиты structured outputs (6 nullable-полей, без minLength).
+    """
+    item: dict[str, Any] = {
         "type": "object",
-        "title": criterion.title,
         "additionalProperties": False,
-        "required": sorted(ANSWER_KEYS),
+        "required": ["criterion_id", "evidence", "explanation", "answer", "scale_value", "na_condition_ref"],
         "properties": {
-            "answer": {"type": "string", "enum": answers},
-            "scale_value": scale_schema,
-            "explanation": {"type": "string", "minLength": 1},
+            "criterion_id": {"type": "string", "enum": [c.id for c in checklist.criteria]},
             "evidence": {"type": "array", "items": _EVIDENCE_SCHEMA},
-            "na_condition_ref": na_ref,
+            "explanation": {"type": "string"},
+            "answer": {"type": "string", "enum": ["yes", "no", "scale", "na"]},
+            "scale_value": _nullable("integer"),
+            "na_condition_ref": _nullable("string"),
         },
     }
-
-
-def build_tool_schema(criteria: list[Criterion]) -> dict[str, Any]:
-    """Схема input_schema tool'а: объект с ключами по criterion.id, все обязательные."""
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": [c.id for c in criteria],
-        "properties": {c.id: criterion_schema(c) for c in criteria},
+        "required": ["results"],
+        "properties": {"results": {"type": "array", "items": item}},
     }
+
+
+def load_results(text: str) -> list[Any] | None:
+    """Текст ответа в список элементов results. Снимает ограду ```json. None: JSON битый или не по форме."""
+    body = text.strip()
+    if (m := _FENCE.match(body)) is not None:
+        body = m.group(1).strip()
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or set(data) != {"results"} or not isinstance(data["results"], list):
+        return None
+    return data["results"]
 
 
 @dataclass
@@ -76,27 +81,61 @@ class ParseOutcome:
     errors: dict[str, list[CriterionError]] = field(default_factory=dict)
 
 
-def parse_tool_input(tool_input: Any, criteria: list[Criterion], turns: list[Turn]) -> ParseOutcome:
+_STOP_MESSAGES = {
+    "max_tokens": "Ответ оборван по лимиту токенов: верните компактный JSON без лишнего текста.",
+    "refusal": "Предыдущий ответ был отклонён: оцените только оператора по данным диалога.",
+}
+
+
+def parse_reply(
+    text: str,
+    stop_reason: str | None,
+    criteria: list[Criterion],
+    turns: list[Turn],
+    *,
+    known_ids: frozenset[str],
+) -> ParseOutcome:
     """Разбор ответа в CriterionResult. Каждый запрошенный критерий попадает в ok или в errors.
 
-    Нет tool-блока или объект не по схеме: ошибка всех запрошенных критериев.
+    stop_reason, отличный от end_turn, битый JSON, элемент без criterion_id и criterion_id вне
+    чек-листа (known_ids) дают ошибку всех запрошенных критериев: такой ответ нельзя привязать к критерию.
+    Элементы про критерии чек-листа вне текущего запроса (уже валидные) игнорируются, повтор их не трогает.
     """
     out = ParseOutcome()
-    ids = {c.id for c in criteria}
-    if tool_input is None:
-        code, msg = E.NO_TOOL_BLOCK, "Ответ без вызова инструмента: верните оценку через tool."
-    elif not isinstance(tool_input, dict) or not set(tool_input) <= ids:
-        code, msg = E.BAD_SHAPE, "Ответ не по схеме: лишние или некорректные ключи верхнего уровня."
+    items: list[Any] | None = None
+    if stop_reason != "end_turn":
+        code, msg = (
+            E.STOP_REASON,
+            _STOP_MESSAGES.get(stop_reason or "", "Ответ завершён нештатно: повторите."),
+        )
+    elif (items := load_results(text)) is None:
+        code, msg = E.BAD_JSON, 'Ответ не является JSON вида {"results": [...]}: верните только JSON.'
+    elif any(not isinstance(i, dict) or not isinstance(i.get("criterion_id"), str) for i in items):
+        code, msg = E.BAD_SHAPE, "Каждый элемент results должен быть объектом со строковым criterion_id."
+    elif any(i["criterion_id"] not in known_ids for i in items):
+        code, msg = (
+            E.UNKNOWN_CRITERION,
+            "В ответе есть criterion_id вне чек-листа: используйте только id из схемы.",
+        )
     else:
+        by_id: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            by_id.setdefault(item["criterion_id"], []).append(item)
         for c in criteria:
-            if c.id not in tool_input:
+            found = by_id.get(c.id, [])
+            if not found:
                 out.errors[c.id] = [CriterionError(c.id, E.MISSING, "Критерий пропущен в ответе.")]
-                continue
-            result, errs = check_answer(c, tool_input[c.id], turns)
-            if result is not None:
-                out.ok[c.id] = result
+            elif len(found) > 1:
+                out.errors[c.id] = [
+                    CriterionError(c.id, E.DUPLICATE, "Критерий встречается больше одного раза.")
+                ]
             else:
-                out.errors[c.id] = errs
+                raw = {k: v for k, v in found[0].items() if k != "criterion_id"}
+                result, errs = check_answer(c, raw, turns)
+                if result is not None:
+                    out.ok[c.id] = result
+                else:
+                    out.errors[c.id] = errs
         return out
     for c in criteria:
         out.errors[c.id] = [CriterionError(c.id, code, msg)]

@@ -32,8 +32,8 @@ def test_llm_mode_builds_the_evaluator_from_settings() -> None:
     evaluator = build_evaluator(llm_settings())
 
     assert isinstance(evaluator, LlmEvaluator)
-    assert evaluator.client.model == "test-model"
-    assert evaluator.prices == Prices(2.0, 10.0)
+    assert evaluator._model == "test-model"
+    assert evaluator._prices == Prices(2.0, 10.0)
 
 
 def test_zero_price_warns_but_starts(caplog: pytest.LogCaptureFixture) -> None:

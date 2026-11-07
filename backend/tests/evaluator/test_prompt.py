@@ -64,11 +64,21 @@ def test_prompt_source_has_no_criteria_ids_or_titles(default_checklist):
         assert c.title not in src
 
 
-def test_prompt_source_has_no_criterion_rules():
-    """Смысл критериев живёт в чек-листе: при замене критерия правило исчезает вместе с ним."""
-    src = PROMPT_SRC.read_text(encoding="utf-8").lower()
-    for word in ("приветств", "представлен"):
-        assert word not in src
+def test_no_criterion_semantics_or_dev_literals_in_prompt_source():
+    src = PROMPT_SRC.read_text(encoding="utf-8")
+    for literal in ("[Имя скрыто]", "приветствие бота", "Язык клиента", "приветств"):
+        assert literal not in src, literal
+
+
+def test_repair_message_has_machine_readable_ids(simple_dialog):
+    from backend.app.evaluator.errors import CriterionError
+    from backend.app.evaluator.prompt import build_repair_message
+
+    msg = build_repair_message(
+        simple_dialog,
+        {"c02": [CriterionError("c02", "x", "проблема А")], "c05": [CriterionError("c05", "y", "Б")]},
+    )
+    assert "Критерии для исправления: c02, c05." in msg and "проблема А" in msg
 
 
 def test_general_rules_present(default_checklist):

@@ -9,7 +9,8 @@ from ..errors import AppError
 
 # Коды ошибок валидации. В логи и сообщения попадают только они, без текстов реплик и цитат.
 BAD_SHAPE = "bad_shape"
-NO_TOOL_BLOCK = "no_tool_block"
+BAD_JSON = "bad_json"
+STOP_REASON = "stop_reason"
 MISSING = "missing"
 DUPLICATE = "duplicate"
 UNKNOWN_CRITERION = "unknown_criterion"
@@ -39,35 +40,58 @@ class CriterionError:
 
 
 class EvaluationError(AppError):
-    """База для всех ошибок оценки. Частичный результат не возвращается никогда."""
+    """База для всех ошибок оценки. Частичный результат не возвращается никогда.
 
-    status_code = 502
+    status_code это код ответа нашего API, его отдаёт обработчик AppError. retryable говорит,
+    повторяет ли пакет такую оценку. Код ответа поставщика лежит отдельно, в upstream_status.
+    usage: расход, уже потраченный на эту оценку (None, если вызовов модели не было).
+    """
+
+    status_code = 500
+    retryable = False
+
+    def __init__(self, message: str, usage: Usage | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 class NoOperatorTurnsError(EvaluationError):
-    """В диалоге нет ни одной реплики operator, модель не вызывалась."""
+    """В диалоге нет ни одной реплики operator, модель не вызывалась. Повтор бесполезен."""
 
     status_code = 422
 
-    def __init__(self, conversation_id: str) -> None:
-        super().__init__(f"нет реплик оператора: {conversation_id}")
+    def __init__(self, conversation_id: str, usage: Usage | None = None) -> None:
+        super().__init__(f"нет реплик оператора: {conversation_id}", usage)
         self.conversation_id = conversation_id
 
 
-class LLMUnavailableError(EvaluationError):
-    """Транспортный уровень исчерпан: 429, 5xx, таймаут, соединение."""
-
-    def __init__(self, message: str, upstream_status: int | None = None, usage: Usage | None = None) -> None:
-        super().__init__(message)
-        self.upstream_status = upstream_status  # код поставщика, не путать со status_code ответа API
-        self.usage = usage  # расход предыдущих успешных попыток этой оценки
-
-
 class ValidationFailedError(EvaluationError):
-    """Ответ модели не прошёл проверку после всех repair-раундов."""
+    """Ответ модели не прошёл проверку после всех repair-раундов. Автоповтора нет."""
+
+    status_code = 502
 
     def __init__(self, errors: list[CriterionError], usage: Usage | None = None) -> None:
         codes = ", ".join(f"{e.criterion_id or '-'}:{e.code}" for e in errors)
-        super().__init__(f"валидация не пройдена: {codes}")
+        super().__init__(f"валидация не пройдена: {codes}", usage)
         self.errors = errors
-        self.usage = usage  # расход, уже потраченный на неудачную оценку
+
+
+class LLMUnavailableError(EvaluationError):
+    """Временный сбой: соединение, таймаут, 429, 5xx. Пакет повторяет такие оценки."""
+
+    status_code = 503
+    retryable = True
+
+    def __init__(self, message: str, upstream_status: int | None = None, usage: Usage | None = None) -> None:
+        super().__init__(message, usage)
+        self.upstream_status = upstream_status
+
+
+class LLMRejectedError(EvaluationError):
+    """Модель отклонила запрос (400, 401, 403, 404 и прочие 4xx): схема, ключ, модель. Без повтора."""
+
+    status_code = 502
+
+    def __init__(self, message: str, upstream_status: int | None = None, usage: Usage | None = None) -> None:
+        super().__init__(message, usage)
+        self.upstream_status = upstream_status
