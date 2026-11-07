@@ -96,6 +96,12 @@ def test_general_rules_present(default_checklist):
         "вложения",
         "по-русски",
         "Образец обоснования",
+        "Внутренняя консультация",
+        "не являются общением с клиентом",
+        "Сказанное коллеге клиенту не сообщено",
+        "Независимость критериев",
+        "Один факт снижает только тот критерий",
+        "независимо от адресата",
     ):
         assert needle in p, needle
     assert "штраф" not in p.lower()
@@ -152,3 +158,27 @@ def test_sample_dialogs_render_one_line_per_turn(fake_dialogs):
         body = render_transcript(d.transcript).splitlines()[1:-1]
         assert len(body) == len(d.transcript)
         assert json.dumps(body, ensure_ascii=False)
+
+
+def test_hold_rule_keeps_colleague_turns_as_context_and_possible_evidence(default_checklist):
+    p = build_system_prompt(default_checklist)
+    rule = p[p.index("7. Внутренняя консультация") : p.index("8. Независимость критериев")]
+    assert "Не игнорируйте такие реплики" in rule and "может быть доказательством" in rule
+    assert "не засчитывайте" in rule  # но клиенту это не засчитывается
+
+
+def test_independence_rule_allows_an_explicit_exception_in_the_criterion(default_checklist):
+    p = build_system_prompt(default_checklist)
+    rule = p[p.index("8. Независимость критериев") : p.index("9. Порог")]
+    assert "прямо не требует иного" in rule and "объясните это в explanation" in rule
+
+
+def test_new_rules_are_general_and_independent_of_checklist(default_checklist, new_criterion_checklist):
+    """Правила одинаковы для любого чек-листа и не называют критерии."""
+
+    def rules(cl):
+        p = build_system_prompt(cl)
+        return p[p.index("7. Внутренняя консультация") : p.index("9. Порог")]
+
+    assert rules(default_checklist) == rules(new_criterion_checklist)
+    assert not re.search(r"\bc\d{2}\b|x99", rules(default_checklist))
