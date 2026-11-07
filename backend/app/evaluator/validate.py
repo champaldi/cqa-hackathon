@@ -19,6 +19,7 @@ EVIDENCE_KEYS = frozenset({"kind", "turn_index", "quote", "range_start", "range_
 
 _QUOTES = dict.fromkeys("«»“”„‟\"‹›‘’‚‛'`", '"')
 _DASHES = dict.fromkeys("-‐‑‒–—―−", "-")
+_ARROWS = dict.fromkeys("→➔➜➞➝➡⟶⇒", "->")
 
 
 def collapse_ws(text: str) -> str:
@@ -26,7 +27,7 @@ def collapse_ws(text: str) -> str:
 
 
 def normalize_with_map(text: str) -> tuple[str, list[tuple[int, int]]]:
-    """Нормализация для поиска цитат: NFC, пробелы, кавычки, тире, casefold.
+    """Нормализация для поиска цитат: NFKC, пробелы, кавычки, тире, стрелки, ё/е, casefold.
 
     Возвращает нормализованную строку и для каждого её символа диапазон в исходном тексте.
     """
@@ -38,7 +39,7 @@ def normalize_with_map(text: str) -> tuple[str, list[tuple[int, int]]]:
         j = i + 1
         while j < n and unicodedata.combining(text[j]):
             j += 1
-        chunk = unicodedata.normalize("NFC", text[i:j])
+        chunk = unicodedata.normalize("NFKC", text[i:j])
         if chunk.isspace():
             if prev_space:
                 origins[-1] = (origins[-1][0], j)
@@ -49,8 +50,8 @@ def normalize_with_map(text: str) -> tuple[str, list[tuple[int, int]]]:
         else:
             prev_space = False
             for ch in chunk:
-                ch = _DASHES.get(_QUOTES.get(ch, ch), _QUOTES.get(ch, ch))
-                for c in ch.casefold():
+                ch = _ARROWS.get(ch) or _QUOTES.get(ch) or _DASHES.get(ch) or ch
+                for c in ch.casefold().replace("ё", "е"):
                     norm.append(c)
                     origins.append((i, j))
         i = j
@@ -211,9 +212,8 @@ def check_answer(
             ctx.fail(E.NA_REASON_UNEXPECTED, "na_reason допустим только при answer = na.")
         if not any(e.kind in ("quote", "checked_range") for e in evidence) and not has_bad_evidence:
             ctx.fail(E.EVIDENCE_MISSING, "Нужно хотя бы одно доказательство: quote или checked_range.")
-        elif criterion.answer_type == "flag" and answer == "yes":
-            if not any(e.kind == "quote" for e in evidence) and not has_bad_evidence:
-                ctx.fail(E.QUOTE_REQUIRED, "Нарушение (yes по флагу) подтверждается цитатой.")
+        elif answer == "yes" and not any(e.kind == "quote" for e in evidence) and not has_bad_evidence:
+            ctx.fail(E.QUOTE_REQUIRED, "Ответ yes подтверждается цитатой (quote), а не только участком.")
 
     if errors:
         return None, errors

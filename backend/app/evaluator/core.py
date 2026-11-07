@@ -7,7 +7,7 @@ import time
 
 from ..contracts import Checklist, CriterionResult, Dialog, EvaluatorOutput, Usage
 from .client import LLMClient, Prices, make_client
-from .errors import CriterionError, NoOperatorTurnsError, ValidationFailedError
+from .errors import CriterionError, LLMUnavailableError, NoOperatorTurnsError, ValidationFailedError
 from .prompt import build_repair_message, build_system_prompt, build_user_message
 from .validate import has_cyrillic, validate_complete
 from .wire import build_tool_schema, parse_tool_input
@@ -21,6 +21,26 @@ def _usage(model: str, calls: int, tokens_in: int, tokens_out: int, prices: Pric
     cost = (tokens_in * prices.input_per_mtok + tokens_out * prices.output_per_mtok) / 1_000_000
     return Usage(
         model=model, llm_calls=calls, input_tokens=tokens_in, output_tokens=tokens_out, cost_usd=cost
+    )
+
+
+def _codes(errs: list[CriterionError]) -> str:
+    return ",".join(f"{e.criterion_id or '-'}:{e.code}" for e in errs) or "-"
+
+
+def _log_done(dialog: Dialog, status: str, usage: Usage, detail: str) -> None:
+    """Итог оценки: только id диалога, статус, коды и расход. Реплик, цитат и ответа модели здесь нет."""
+    log.info(
+        "evaluator_done conversation_id=%s status=%s model=%s calls=%d input_tokens=%d output_tokens=%d "
+        "cost_usd=%.6f detail=%s",
+        dialog.conversation_id,
+        status,
+        usage.model,
+        usage.llm_calls,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
+        detail,
     )
 
 
@@ -50,7 +70,12 @@ def evaluate(
     for attempt in range(max_repair_rounds + 1):
         user = build_user_message(dialog) if attempt == 0 else build_repair_message(dialog, errors)
         started = time.perf_counter()
-        resp = client.complete(system, user, build_tool_schema(pending))  # LLMUnavailableError идёт наверх
+        try:
+            resp = client.complete(system, user, build_tool_schema(pending))
+        except LLMUnavailableError as exc:
+            exc.usage = _usage(model, calls, tokens_in, tokens_out, prices)
+            _log_done(dialog, "llm_unavailable", exc.usage, f"status_code={exc.status_code or '-'}")
+            raise
         latency_ms = int((time.perf_counter() - started) * 1000)
         calls += 1
         tokens_in += resp.input_tokens
@@ -66,7 +91,7 @@ def evaluate(
             dialog.conversation_id,
             attempt,
             ",".join(c.id for c in pending),
-            ",".join(f"{cid}:{e.code}" for cid, errs in errors.items() for e in errs) or "-",
+            _codes([e for errs in errors.values() for e in errs]),
             resp.input_tokens,
             resp.output_tokens,
             latency_ms,
@@ -77,11 +102,14 @@ def evaluate(
 
     usage = _usage(model, calls, tokens_in, tokens_out, prices)
     if pending:
-        raise ValidationFailedError([e for errs in errors.values() for e in errs], usage)
+        failed = [e for errs in errors.values() for e in errs]
+        _log_done(dialog, "failed", usage, _codes(failed))
+        raise ValidationFailedError(failed, usage)
 
     results = [valid[c.id] for c in checklist.criteria]
     final_errors = validate_complete(results, checklist, turns)
     if final_errors:
+        _log_done(dialog, "failed", usage, _codes(final_errors))
         raise ValidationFailedError(final_errors, usage)
     for r in results:
         if not has_cyrillic(r.explanation):  # мягкая проверка: RU требуется промптом, результат не режем
@@ -90,4 +118,5 @@ def evaluate(
                 dialog.conversation_id,
                 r.criterion_id,
             )
+    _log_done(dialog, "ok", usage, "-")
     return EvaluatorOutput(results=results, usage=usage)

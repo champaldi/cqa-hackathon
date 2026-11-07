@@ -52,6 +52,11 @@ class NoOperatorTurnsError(EvaluationError):
 class LLMUnavailableError(EvaluationError):
     """Транспортный уровень исчерпан: 429, 5xx, таймаут, соединение."""
 
+    def __init__(self, message: str, status_code: int | None = None, usage: Usage | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.usage = usage  # расход предыдущих успешных попыток этой оценки
+
 
 class ValidationFailedError(EvaluationError):
     """Ответ модели не прошёл проверку после всех repair-раундов."""

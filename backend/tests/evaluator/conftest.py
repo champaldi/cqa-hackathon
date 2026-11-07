@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.contracts import Checklist, Criterion, Dialog, Turn
+from backend.app.contracts import Checklist, Criterion, Dialog, ScaleStep, Turn
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -23,13 +23,13 @@ def make_dialog(*pairs: tuple[str, str], cid: str = "t-1") -> Dialog:
 
 
 @pytest.fixture(scope="session")
-def checklist() -> Checklist:
+def default_checklist() -> Checklist:
     data = json.loads((ROOT / "config/checklist.default.json").read_text(encoding="utf-8"))
     return Checklist(id="default", version=1, **data)
 
 
 @pytest.fixture(scope="session")
-def sample_dialogs() -> list[Dialog]:
+def fake_dialogs() -> list[Dialog]:
     data = json.loads((ROOT / "config/sample_dialogs.json").read_text(encoding="utf-8"))
     return [
         Dialog(
@@ -45,7 +45,7 @@ def sample_dialogs() -> list[Dialog]:
 
 
 @pytest.fixture
-def dialog() -> Dialog:
+def simple_dialog() -> Dialog:
     return make_dialog(
         ("client", "Как посмотреть комиссию?"),
         ("operator", "Здравствуйте! Меня зовут Мира. Откройте раздел «Отчёты»."),
@@ -53,9 +53,19 @@ def dialog() -> Dialog:
     )
 
 
+NEW_SCALE_CRITERION = Criterion(
+    id="x99",
+    title="Новый шкальный критерий",
+    description="Описание нового критерия без подсказки.",
+    answer_type="scale",
+    weight=5,
+    scale=[ScaleStep(value=v, label=f"шаг {v} из шкалы") for v in range(6)],
+)
+
+
 @pytest.fixture
-def new_criterion_checklist(checklist: Checklist) -> Checklist:
-    extra = Criterion(
-        id="x99", title="Новый", description="Новый критерий без подсказки.", answer_type="yes_no", weight=5
+def new_criterion_checklist(default_checklist: Checklist) -> Checklist:
+    """Чек-лист с добавленным критерием: новый id, шкала 0-5, без llm_hint."""
+    return default_checklist.model_copy(
+        update={"criteria": [*default_checklist.criteria, NEW_SCALE_CRITERION]}
     )
-    return checklist.model_copy(update={"criteria": [*checklist.criteria, extra]})

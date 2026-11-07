@@ -35,7 +35,7 @@ FaultKind = Literal[
     "duplicate_criterion",
     "no_tool_block",
 ]
-_TURN_LINE = re.compile(r"^\[(\d+)\] (client|operator|bot|system): (.*)$")
+_TURN_LINE = re.compile(r"^\[(\d+)\] (client|operator|bot|system) \([^)]*\): (.*)$")
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,9 @@ class MockClient:
         enum = spec["properties"]["answer"]["enum"]
         scale_enum = spec["properties"]["scale_value"].get("enum")
         na_ref = spec["properties"]["na_condition_ref"].get("enum", [None])[0]
-        first_op = next(((i, t) for i, s, t in turns if s == "operator" and t.strip()), None)
+        first_op = next(((i, t) for i, s, t in turns if s == "operator" and t.strip()), None) or next(
+            ((i, t) for i, _, t in turns if t.strip()), None
+        )
         anchor = first_op[0] if first_op else (turns[0][0] if turns else 0)
         if cid in self.na_criteria and "na" in enum:
             return {
@@ -99,11 +101,11 @@ class MockClient:
             text = first_op[1].strip()
             chunk = text[:60].rsplit(" ", 1)[0] if len(text) > 60 and " " in text[:60] else text[:60]
             evidence = [_evidence("quote", turn_index=first_op[0], quote=chunk)]
-        else:
+        else:  # цитировать нечего: yes без цитаты невалиден, поэтому no по участку
             last = turns[-1][0] if turns else 0
             evidence = [_evidence("checked_range", range_start=0, range_end=last)]
         return {
-            "answer": enum[0],
+            "answer": enum[0] if first_op or "no" not in enum else "no",
             "scale_value": next((v for v in scale_enum or [] if v is not None), None),
             "explanation": "Mock: ответ собран для проверки программного потока.",
             "evidence": evidence,
@@ -161,7 +163,10 @@ MAX_TOKENS = 8192
 
 
 class AnthropicClient:
-    """Реальная модель. Включается только при CQA_EVALUATOR=llm. Не проверялся на живом API."""
+    """Реальная модель. Включается только при CQA_EVALUATOR=llm. Не проверялся на живом API.
+
+    Параметры вызова ограничены сигнатурой anthropic==2.6.0 (там нет temperature).
+    """
 
     def __init__(
         self,
@@ -194,7 +199,6 @@ class AnthropicClient:
             resp = self._sdk.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                temperature=0,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user}],
                 tools=[{"name": TOOL_NAME, "description": TOOL_DESCRIPTION, "input_schema": tool_schema}],
@@ -202,7 +206,11 @@ class AnthropicClient:
             )
         except anthropic.APIError as exc:
             # Текст исключения может содержать тело запроса, поэтому в сообщение идёт только тип.
-            raise LLMUnavailableError(f"вызов модели не удался: {type(exc).__name__}") from exc
+            status = getattr(exc, "status_code", None)
+            suffix = f", HTTP {status}" if status else ""
+            raise LLMUnavailableError(
+                f"вызов модели не удался: {type(exc).__name__}{suffix}", status_code=status
+            ) from exc
         tool_input = next(
             (b.input for b in resp.content if getattr(b, "type", None) == "tool_use" and b.name == TOOL_NAME),
             None,

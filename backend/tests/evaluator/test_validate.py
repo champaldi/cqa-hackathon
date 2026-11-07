@@ -22,12 +22,18 @@ def ev(kind="quote", **kw):
     return base | kw
 
 
+def _default_evidence(answer):
+    if answer == "yes":
+        return [ev(turn_index=1, quote="Откройте раздел")]
+    return [ev("checked_range", range_start=0, range_end=2)]
+
+
 def raw(answer="yes", scale_value=None, evidence=None, ref=None, explanation="Пояснение"):
     return {
         "answer": answer,
         "scale_value": scale_value,
         "explanation": explanation,
-        "evidence": [ev("checked_range", range_start=0, range_end=2)] if evidence is None else evidence,
+        "evidence": _default_evidence(answer) if evidence is None else evidence,
         "na_condition_ref": ref,
     }
 
@@ -88,7 +94,8 @@ def test_flag_rules():
     assert codes(FLAG, raw("no")) == set()
     q = ev(turn_index=1, quote="Откройте раздел")
     assert codes(FLAG, raw("yes", evidence=[q])) == set()
-    assert codes(FLAG, raw("yes")) == {E.QUOTE_REQUIRED}  # нарушение без цитаты
+    rng = [ev("checked_range", range_start=0, range_end=2)]
+    assert codes(FLAG, raw("yes", evidence=rng)) == {E.QUOTE_REQUIRED}  # нарушение без цитаты
     assert E.NA_NOT_ALLOWED in codes(FLAG, raw("na", ref="x"))
 
 
@@ -150,7 +157,7 @@ def test_turn_index_and_range_bounds():
     assert codes(YES_NO, raw(evidence=[ev(turn_index=-1, quote="Спасибо")])) == bad
     assert codes(YES_NO, raw(evidence=[ev(turn_index=None, quote="Спасибо")])) == bad
     ok = ev("checked_range", range_start=0, range_end=2)
-    assert codes(YES_NO, raw(evidence=[ok])) == set()
+    assert codes(YES_NO, raw("no", evidence=[ok])) == set()
     for s, e in [(-1, 1), (2, 1), (0, 3)]:
         assert codes(YES_NO, raw(evidence=[ev("checked_range", range_start=s, range_end=e)])) == {
             E.RANGE_INVALID
@@ -212,7 +219,7 @@ def _ok(cid):
     )
 
 
-def test_validate_complete(checklist):
+def test_validate_complete(default_checklist):
     turns = TURNS
     good = [
         CriterionResult(
@@ -222,15 +229,80 @@ def test_validate_complete(checklist):
             explanation="ок",
             evidence=[Evidence(kind="checked_range", range_start=0, range_end=2)],
         )
-        for c in checklist.criteria
+        for c in default_checklist.criteria
     ]
-    assert validate_complete(good, checklist, turns) == []
+    assert validate_complete(good, default_checklist, turns) == []
     missing = [r for r in good if r.criterion_id != "c03"]
-    assert {e.code for e in validate_complete(missing, checklist, turns)} == {E.MISSING}
+    assert {e.code for e in validate_complete(missing, default_checklist, turns)} == {E.MISSING}
     dup = [*good, good[0]]
-    assert {e.code for e in validate_complete(dup, checklist, turns)} == {E.DUPLICATE}
+    assert {e.code for e in validate_complete(dup, default_checklist, turns)} == {E.DUPLICATE}
     extra = [*good, _ok("zzz")]
-    assert {e.code for e in validate_complete(extra, checklist, turns)} == {E.UNKNOWN_CRITERION}
-    assert {e.code for e in validate_complete(list(reversed(good)), checklist, turns)} == {E.BAD_SHAPE}
+    assert {e.code for e in validate_complete(extra, default_checklist, turns)} == {E.UNKNOWN_CRITERION}
+    assert {e.code for e in validate_complete(list(reversed(good)), default_checklist, turns)} == {
+        E.BAD_SHAPE
+    }
     broken = [good[0].model_copy(update={"answer": "na"}), *good[1:]]
-    assert E.NA_NOT_ALLOWED in {e.code for e in validate_complete(broken, checklist, turns)}
+    assert E.NA_NOT_ALLOWED in {e.code for e in validate_complete(broken, default_checklist, turns)}
+
+
+# --- yes требует цитату, нормализация, сообщения без текста ---
+
+
+def test_yes_requires_quote_for_every_type():
+    rng = [ev("checked_range", range_start=0, range_end=2)]
+    assert codes(YES_NO, raw("yes", evidence=rng)) == {E.QUOTE_REQUIRED}
+    assert codes(YES_NO, raw("yes", evidence=[*rng, ev(turn_index=1, quote="Откройте раздел")])) == set()
+    assert codes(YES_NO, raw("no", evidence=rng)) == set()  # no: достаточно checked_range
+    assert codes(SCALE, raw("scale", 5, evidence=rng)) == set()  # scale: достаточно checked_range
+
+
+def test_quote_from_system_and_other_roles_accepted():
+    turns = make_turns(("system", "Личность клиента подтверждена."), ("bot", "Я бот"), ("operator", "ок"))
+    for i, q in [(0, "личность клиента подтверждена"), (1, "Я бот")]:
+        res, errs = check_answer(YES_NO, raw("yes", evidence=[ev(turn_index=i, quote=q)]), turns)
+        assert not errs and res.evidence[0].quote == turns[i].text.rstrip(".")
+
+
+@pytest.mark.parametrize(
+    ("text", "quote", "expected"),
+    [
+        ("Отчёты за месяц", "отчеты за месяц", "Отчёты за месяц"),  # е вместо ё
+        ("Отчеты за месяц", "Отчёты за месяц", "Отчеты за месяц"),  # ё вместо е
+        ("Ёлка и ёж", "елка и еж", "Ёлка и ёж"),
+        ("Нажмите «Отправить»", 'нажмите "отправить"', "Нажмите «Отправить»"),
+        ("Нажмите “Отправить”", "Нажмите «Отправить»", "Нажмите “Отправить”"),
+        ("it's fine", "it\u2019s fine", "it's fine"),
+        ("Шаг 1 → Шаг 2", "Шаг 1 -> Шаг 2", "Шаг 1 → Шаг 2"),
+        ("Шаг 1 -> Шаг 2", "Шаг 1 \u2192 Шаг 2", "Шаг 1 -> Шаг 2"),
+        ("Цена ABC 5", "Цена \uff21\uff22\uff23 \uff15", "Цена ABC 5"),  # NFKC: полноширинные
+        ("of\ufb01ce office", "office", "of\ufb01ce"),  # NFKC: лигатура fi
+        ("Сумма\u00a0 100  тенге", "сумма 100 тенге", "Сумма\u00a0 100  тенге"),
+        ("Привет\nКак дела", "привет как дела", "Привет\nКак дела"),
+    ],
+)
+def test_normalization_variants_store_exact_original(text, quote, expected):
+    assert find_quote(text, quote) == expected
+    turns = make_turns(("operator", text))
+    res, errs = check_answer(YES_NO, raw("yes", evidence=[ev(turn_index=0, quote=quote)]), turns)
+    assert not errs and res.evidence[0].quote == expected
+
+
+def test_normalization_does_not_become_fuzzy():
+    assert find_quote("Откройте раздел", "Откройте разделы") is None
+    assert find_quote("Откройте раздел", "Откройте  другой раздел") is None
+    assert find_quote("Ёж", "ёжик") is None
+
+
+def test_error_messages_never_contain_quote_text():
+    secret = "СЕКРЕТНАЯ ЦИТАТА 777"
+    bad = [
+        raw("yes", evidence=[ev(turn_index=1, quote=secret)]),
+        raw("yes", evidence=[ev(turn_index=9, quote=secret)]),
+        raw("yes", evidence=[ev(turn_index=1, quote=secret + " … хвост")]),
+        raw("yes", evidence=[ev(turn_index=1, quote=secret, range_start=0, range_end=1)]),
+        raw("yes", explanation=secret, evidence=[]),
+    ]
+    for r in bad:
+        _, errs = check_answer(YES_NO, r, TURNS)
+        assert errs and all("СЕКРЕТНАЯ" not in e.message and secret not in e.message for e in errs)
+        assert all(e.criterion_id == "a" for e in errs)
